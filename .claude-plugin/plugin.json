@@ -1,0 +1,10 @@
+{
+  "name": "optimal-cli",
+  "description": "Unified CLI skills for Optimal's financial analytics, content marketing, and infrastructure operations.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Carlos Lenis",
+    "email": "95986651+clenisa@users.noreply.github.com"
+  },
+  "keywords": ["finance", "fpa", "newsletter", "cms", "kanban", "cli"]
+}
