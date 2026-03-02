@@ -10,6 +10,7 @@ import {
 } from '../lib/kanban.js'
 import { runAuditComparison } from '../lib/returnpro/audit.js'
 import { exportKpis, formatKpiTable, formatKpiCsv } from '../lib/returnpro/kpis.js'
+import { deploy, healthCheck, listApps } from '../lib/infra/deploy.js'
 
 const program = new Command()
   .name('optimal')
@@ -190,6 +191,39 @@ program
       console.log(formatKpiCsv(rows))
     } else {
       console.log(formatKpiTable(rows))
+    }
+  })
+
+// Deploy command
+program
+  .command('deploy')
+  .description('Deploy an app to Vercel (preview or production)')
+  .argument('<app>', `App to deploy (${listApps().join(', ')})`)
+  .option('--prod', 'Deploy to production', false)
+  .action(async (app: string, opts: { prod: boolean }) => {
+    console.log(`Deploying ${app}${opts.prod ? ' (production)' : ' (preview)'}...`)
+    try {
+      const url = await deploy(app, opts.prod)
+      console.log(`Deployed: ${url}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`Deploy failed: ${msg}`)
+      process.exit(1)
+    }
+  })
+
+// Health check command
+program
+  .command('health-check')
+  .description('Run health check across all Optimal services')
+  .action(async () => {
+    try {
+      const output = await healthCheck()
+      console.log(output)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`Health check failed: ${msg}`)
+      process.exit(1)
     }
   })
 
