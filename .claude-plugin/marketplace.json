@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "optimal-cli",
+  "description": "Optimal CLI plugin marketplace — unified skills for financial analytics, content marketing, and infrastructure",
+  "owner": {
+    "name": "Carlos Lenis",
+    "email": "95986651+clenisa@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "optimal-cli",
+      "description": "Unified CLI skills for Optimal's financial analytics, content marketing, and infrastructure operations. 29 skills across finance, CMS, newsletters, social media, transactions, budgets, and infrastructure.",
+      "category": "development",
+      "source": ".",
+      "homepage": "https://github.com/clenisa/optimal-cli"
+    }
+  ]
+}
