@@ -8,6 +8,7 @@ import {
   logActivity,
   type CliTask,
 } from '../lib/kanban.js'
+import { runAuditComparison } from '../lib/returnpro/audit.js'
 
 const program = new Command()
   .name('optimal')
@@ -91,6 +92,72 @@ board
       })
     }
     console.log(`Updated task ${task.id}: status → ${task.status}, agent → ${task.assigned_agent ?? '—'}`)
+  })
+
+// Audit financials command
+program
+  .command('audit-financials')
+  .description('Compare staged financials against confirmed income statements')
+  .option('--months <csv>', 'Comma-separated YYYY-MM months to audit (default: all)')
+  .option('--tolerance <n>', 'Dollar tolerance for match detection', '1.00')
+  .action(async (opts) => {
+    const months = opts.months
+      ? opts.months.split(',').map((m: string) => m.trim())
+      : undefined
+    const tolerance = parseFloat(opts.tolerance)
+
+    console.log('Fetching financial data...')
+    const result = await runAuditComparison(months, tolerance)
+
+    console.log(`\nStaging rows: ${result.totalStagingRows}  |  Confirmed rows: ${result.totalConfirmedRows}`)
+    console.log(`Tolerance: $${tolerance.toFixed(2)}\n`)
+
+    // Header
+    console.log(
+      '| Month   | Confirmed | Staged | Match | SignFlip | Mismatch | C-Only | S-Only | Accuracy |'
+    )
+    console.log(
+      '|---------|-----------|--------|-------|---------|----------|--------|--------|----------|'
+    )
+
+    let flagged = false
+    for (const s of result.summaries) {
+      const acc = s.accuracy !== null ? `${s.accuracy}%` : 'N/A'
+      const warn = s.accuracy !== null && s.accuracy < 100 ? ' *' : ''
+      if (warn) flagged = true
+
+      console.log(
+        `| ${s.month} | ${String(s.confirmedAccounts).padStart(9)} | ${String(s.stagedAccounts).padStart(6)} | ${String(s.exactMatch).padStart(5)} | ${String(s.signFlipMatch).padStart(7)} | ${String(s.mismatch).padStart(8)} | ${String(s.confirmedOnly).padStart(6)} | ${String(s.stagingOnly).padStart(6)} | ${(acc + warn).padStart(8)} |`
+      )
+    }
+
+    if (flagged) {
+      console.log('\n* Months below 100% accuracy — investigate mismatches')
+    }
+
+    // Totals row
+    if (result.summaries.length > 1) {
+      const totals = result.summaries.reduce(
+        (acc, s) => ({
+          confirmed: acc.confirmed + s.confirmedAccounts,
+          staged: acc.staged + s.stagedAccounts,
+          exact: acc.exact + s.exactMatch,
+          flip: acc.flip + s.signFlipMatch,
+          mismatch: acc.mismatch + s.mismatch,
+          cOnly: acc.cOnly + s.confirmedOnly,
+          sOnly: acc.sOnly + s.stagingOnly,
+        }),
+        { confirmed: 0, staged: 0, exact: 0, flip: 0, mismatch: 0, cOnly: 0, sOnly: 0 },
+      )
+      const totalOverlap = totals.exact + totals.flip + totals.mismatch
+      const totalAcc = totalOverlap > 0
+        ? Math.round(((totals.exact + totals.flip) / totalOverlap) * 1000) / 10
+        : null
+
+      console.log(
+        `| TOTAL   | ${String(totals.confirmed).padStart(9)} | ${String(totals.staged).padStart(6)} | ${String(totals.exact).padStart(5)} | ${String(totals.flip).padStart(7)} | ${String(totals.mismatch).padStart(8)} | ${String(totals.cOnly).padStart(6)} | ${String(totals.sOnly).padStart(6)} | ${(totalAcc !== null ? `${totalAcc}%` : 'N/A').padStart(8)} |`
+      )
+    }
   })
 
 program.parseAsync()
