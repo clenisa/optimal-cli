@@ -23,6 +23,8 @@ import {
 import { readFileSync, existsSync } from 'node:fs'
 import { generateNewsletter } from '../lib/newsletter/generate.js'
 import { scrapeCompanies, formatCsv } from '../lib/social/scraper.js'
+import { ingestTransactions } from '../lib/transactions/ingest.js'
+import { stampTransactions } from '../lib/transactions/stamp.js'
 
 const program = new Command()
   .name('optimal')
@@ -418,5 +420,71 @@ program
       }
     },
   )
+
+// Ingest transactions command
+program
+  .command('ingest-transactions')
+  .description('Parse & deduplicate bank CSV files into the transactions table')
+  .requiredOption('--file <path>', 'Path to the CSV file')
+  .requiredOption('--user-id <uuid>', 'Supabase user UUID')
+  .action(async (opts: { file: string; userId: string }) => {
+    if (!existsSync(opts.file)) {
+      console.error(`File not found: ${opts.file}`)
+      process.exit(1)
+    }
+
+    console.log(`Ingesting transactions from: ${opts.file}`)
+    try {
+      const result = await ingestTransactions(opts.file, opts.userId)
+
+      console.log(`\nFormat detected: ${result.format}`)
+      console.log(
+        `Inserted: ${result.inserted}  |  Skipped (duplicates): ${result.skipped}  |  Failed: ${result.failed}`,
+      )
+
+      if (result.errors.length > 0) {
+        console.log(`\nWarnings/Errors (${result.errors.length}):`)
+        for (const err of result.errors.slice(0, 20)) {
+          console.log(`  - ${err}`)
+        }
+        if (result.errors.length > 20) {
+          console.log(`  ... and ${result.errors.length - 20} more`)
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`Ingest failed: ${msg}`)
+      process.exit(1)
+    }
+  })
+
+// Stamp transactions command
+program
+  .command('stamp-transactions')
+  .description('Auto-categorize unclassified transactions using rule-based matching')
+  .requiredOption('--user-id <uuid>', 'Supabase user UUID')
+  .option('--dry-run', 'Preview matches without writing to database', false)
+  .action(async (opts: { userId: string; dryRun: boolean }) => {
+    console.log(
+      `Stamping transactions for user: ${opts.userId}${opts.dryRun ? ' (DRY RUN)' : ''}`,
+    )
+    try {
+      const result = await stampTransactions(opts.userId, { dryRun: opts.dryRun })
+
+      console.log(`\nTotal unclassified: ${result.total}`)
+      console.log(`Stamped: ${result.stamped}  |  Unmatched: ${result.unmatched}`)
+      console.log(
+        `By match type: PATTERN=${result.byMatchType.PATTERN}, LEARNED=${result.byMatchType.LEARNED}, EXACT=${result.byMatchType.EXACT}, FUZZY=${result.byMatchType.FUZZY}, CATEGORY_INFER=${result.byMatchType.CATEGORY_INFER}`,
+      )
+
+      if (result.dryRun) {
+        console.log('\n(Dry run — no database changes made)')
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`Stamp failed: ${msg}`)
+      process.exit(1)
+    }
+  })
 
 program.parseAsync()
