@@ -21,6 +21,7 @@ import {
   formatProjectionTable,
 } from '../lib/budget/projections.js'
 import { readFileSync } from 'node:fs'
+import { generateNewsletter } from '../lib/newsletter/generate.js'
 
 const program = new Command()
   .name('optimal')
@@ -327,6 +328,33 @@ program
     }
 
     console.log(exportToCSV(projections))
+  })
+
+// Newsletter generation command
+program
+  .command('generate-newsletter')
+  .description('Generate a branded newsletter with AI content and push to Strapi CMS')
+  .requiredOption('--brand <brand>', 'Brand: CRE-11TRUST or LIFEINSUR')
+  .option('--date <date>', 'Edition date as YYYY-MM-DD (default: today)')
+  .option('--excel <path>', 'Path to Excel file with property listings (CRE-11TRUST only)')
+  .option('--dry-run', 'Generate content but do NOT push to Strapi', false)
+  .action(async (opts: { brand: string; date?: string; excel?: string; dryRun: boolean }) => {
+    try {
+      const result = await generateNewsletter({
+        brand: opts.brand,
+        date: opts.date,
+        excelPath: opts.excel,
+        dryRun: opts.dryRun,
+      })
+
+      if (result.strapiDocumentId) {
+        console.log(`\nStrapi documentId: ${result.strapiDocumentId}`)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`Newsletter generation failed: ${msg}`)
+      process.exit(1)
+    }
   })
 
 program.parseAsync()
