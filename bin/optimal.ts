@@ -9,6 +9,7 @@ import {
   type CliTask,
 } from '../lib/kanban.js'
 import { runAuditComparison } from '../lib/returnpro/audit.js'
+import { exportKpis, formatKpiTable, formatKpiCsv } from '../lib/returnpro/kpis.js'
 
 const program = new Command()
   .name('optimal')
@@ -157,6 +158,38 @@ program
       console.log(
         `| TOTAL   | ${String(totals.confirmed).padStart(9)} | ${String(totals.staged).padStart(6)} | ${String(totals.exact).padStart(5)} | ${String(totals.flip).padStart(7)} | ${String(totals.mismatch).padStart(8)} | ${String(totals.cOnly).padStart(6)} | ${String(totals.sOnly).padStart(6)} | ${(totalAcc !== null ? `${totalAcc}%` : 'N/A').padStart(8)} |`
       )
+    }
+  })
+
+// Export KPIs command
+program
+  .command('export-kpis')
+  .description('Export KPI totals by program/client from ReturnPro financial data')
+  .option('--months <csv>', 'Comma-separated YYYY-MM months (default: 3 most recent)')
+  .option('--programs <csv>', 'Comma-separated program name substrings to filter')
+  .option('--format <fmt>', 'Output format: table or csv', 'table')
+  .action(async (opts) => {
+    const months = opts.months
+      ? opts.months.split(',').map((m: string) => m.trim())
+      : undefined
+    const programs = opts.programs
+      ? opts.programs.split(',').map((p: string) => p.trim())
+      : undefined
+    const format: string = opts.format
+
+    if (format !== 'table' && format !== 'csv') {
+      console.error(`Invalid format "${format}". Use "table" or "csv".`)
+      process.exit(1)
+    }
+
+    console.error('Fetching KPI data...')
+    const rows = await exportKpis({ months, programs })
+    console.error(`Fetched ${rows.length} KPI rows`)
+
+    if (format === 'csv') {
+      console.log(formatKpiCsv(rows))
+    } else {
+      console.log(formatKpiTable(rows))
     }
   })
 
