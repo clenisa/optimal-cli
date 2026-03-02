@@ -11,6 +11,16 @@ import {
 import { runAuditComparison } from '../lib/returnpro/audit.js'
 import { exportKpis, formatKpiTable, formatKpiCsv } from '../lib/returnpro/kpis.js'
 import { deploy, healthCheck, listApps } from '../lib/infra/deploy.js'
+import {
+  fetchWesImports,
+  parseSummaryFromJson,
+  initializeProjections,
+  applyUniformAdjustment,
+  calculateTotals,
+  exportToCSV,
+  formatProjectionTable,
+} from '../lib/budget/projections.js'
+import { readFileSync } from 'node:fs'
 
 const program = new Command()
   .name('optimal')
@@ -225,6 +235,98 @@ program
       console.error(`Health check failed: ${msg}`)
       process.exit(1)
     }
+  })
+
+// Budget projection commands
+
+async function loadProjectionData(opts: {
+  file?: string
+  fiscalYear?: string
+  userId?: string
+}) {
+  if (opts.file) {
+    const raw = readFileSync(opts.file, 'utf-8')
+    return parseSummaryFromJson(raw)
+  }
+  const fy = opts.fiscalYear ? parseInt(opts.fiscalYear) : 2025
+  return fetchWesImports({ fiscalYear: fy, userId: opts.userId })
+}
+
+function resolveAdjustmentType(
+  raw?: string,
+): 'percentage' | 'flat' {
+  if (raw === 'flat') return 'flat'
+  return 'percentage'
+}
+
+program
+  .command('project-budget')
+  .description('Run FY26 budget projections with adjustments on FY25 checked-in units')
+  .option('--adjustment-type <type>', 'Adjustment type: percent or flat', 'percent')
+  .option('--adjustment-value <n>', 'Adjustment value (e.g., 4 for 4%)', '0')
+  .option('--format <fmt>', 'Output format: table or csv', 'table')
+  .option('--fiscal-year <fy>', 'Base fiscal year for actuals', '2025')
+  .option('--user-id <uuid>', 'Supabase user UUID to filter by')
+  .option('--file <path>', 'JSON file of CheckedInUnitsSummary[] (skips Supabase)')
+  .action(async (opts) => {
+    const format: string = opts.format
+    if (format !== 'table' && format !== 'csv') {
+      console.error(`Invalid format "${format}". Use "table" or "csv".`)
+      process.exit(1)
+    }
+
+    console.error('Loading projection data...')
+    const summary = await loadProjectionData(opts)
+    console.error(`Loaded ${summary.length} programs`)
+
+    let projections = initializeProjections(summary)
+    const adjType = resolveAdjustmentType(opts.adjustmentType)
+    const adjValue = parseFloat(opts.adjustmentValue)
+
+    if (adjValue !== 0) {
+      projections = applyUniformAdjustment(projections, adjType, adjValue)
+      console.error(
+        `Applied ${adjType} adjustment: ${adjType === 'percentage' ? `${adjValue}%` : `${adjValue >= 0 ? '+' : ''}${adjValue} units`}`,
+      )
+    }
+
+    const totals = calculateTotals(projections)
+    console.error(
+      `Totals: ${totals.totalActual} actual -> ${totals.totalProjected} projected (${totals.percentageChange >= 0 ? '+' : ''}${totals.percentageChange.toFixed(1)}%)`,
+    )
+
+    if (format === 'csv') {
+      console.log(exportToCSV(projections))
+    } else {
+      console.log(formatProjectionTable(projections))
+    }
+  })
+
+program
+  .command('export-budget')
+  .description('Export FY26 budget projections as CSV')
+  .option('--adjustment-type <type>', 'Adjustment type: percent or flat', 'percent')
+  .option('--adjustment-value <n>', 'Adjustment value (e.g., 4 for 4%)', '0')
+  .option('--fiscal-year <fy>', 'Base fiscal year for actuals', '2025')
+  .option('--user-id <uuid>', 'Supabase user UUID to filter by')
+  .option('--file <path>', 'JSON file of CheckedInUnitsSummary[] (skips Supabase)')
+  .action(async (opts) => {
+    console.error('Loading projection data...')
+    const summary = await loadProjectionData(opts)
+    console.error(`Loaded ${summary.length} programs`)
+
+    let projections = initializeProjections(summary)
+    const adjType = resolveAdjustmentType(opts.adjustmentType)
+    const adjValue = parseFloat(opts.adjustmentValue)
+
+    if (adjValue !== 0) {
+      projections = applyUniformAdjustment(projections, adjType, adjValue)
+      console.error(
+        `Applied ${adjType} adjustment: ${adjType === 'percentage' ? `${adjValue}%` : `${adjValue >= 0 ? '+' : ''}${adjValue} units`}`,
+      )
+    }
+
+    console.log(exportToCSV(projections))
   })
 
 program.parseAsync()
