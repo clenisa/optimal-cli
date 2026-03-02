@@ -20,8 +20,9 @@ import {
   exportToCSV,
   formatProjectionTable,
 } from '../lib/budget/projections.js'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { generateNewsletter } from '../lib/newsletter/generate.js'
+import { scrapeCompanies, formatCsv } from '../lib/social/scraper.js'
 
 const program = new Command()
   .name('optimal')
@@ -356,5 +357,66 @@ program
       process.exit(1)
     }
   })
+
+// Scrape Meta Ad Library command
+program
+  .command('scrape-ads')
+  .description('Scrape Meta Ad Library for competitor ad intelligence')
+  .requiredOption(
+    '--companies <csv-or-file>',
+    'Comma-separated company names or path to a text file (one per line)',
+  )
+  .option('--output <path>', 'Save CSV results to file (default: stdout)')
+  .option('--batch-size <n>', 'Companies per batch', '6')
+  .action(
+    async (opts: {
+      companies: string
+      output?: string
+      batchSize: string
+    }) => {
+      // Parse companies: file path or comma-separated list
+      let companies: string[]
+      if (existsSync(opts.companies)) {
+        const raw = readFileSync(opts.companies, 'utf-8')
+        companies = raw
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0 && !l.startsWith('#'))
+      } else {
+        companies = opts.companies
+          .split(',')
+          .map((c) => c.trim())
+          .filter((c) => c.length > 0)
+      }
+
+      if (companies.length === 0) {
+        console.error('No companies specified')
+        process.exit(1)
+      }
+
+      const batchSize = parseInt(opts.batchSize)
+      if (isNaN(batchSize) || batchSize < 1) {
+        console.error('Invalid batch size')
+        process.exit(1)
+      }
+
+      try {
+        const result = await scrapeCompanies({
+          companies,
+          outputPath: opts.output,
+          batchSize,
+        })
+
+        // If no output file, write CSV to stdout
+        if (!opts.output) {
+          process.stdout.write(formatCsv(result.ads))
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`Scrape failed: ${msg}`)
+        process.exit(1)
+      }
+    },
+  )
 
 program.parseAsync()
