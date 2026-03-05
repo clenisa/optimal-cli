@@ -38,6 +38,7 @@ import { publishBlog, createBlogPost, listBlogDrafts } from '../lib/cms/publish-
 import { migrateDb, listPendingMigrations, createMigration } from '../lib/infra/migrate.js'
 import { saveScenario, loadScenario, listScenarios, compareScenarios, deleteScenario } from '../lib/budget/scenarios.js'
 import { deleteBatch, previewBatch } from '../lib/transactions/delete-batch.js'
+import { pushConfig, pullConfig, listConfigs, diffConfig, syncConfig } from '../lib/config.js'
 
 const program = new Command()
   .name('optimal')
@@ -977,6 +978,109 @@ program
     } else {
       const result = await deleteBatch({ table, userId: opts.userId, filters, dryRun: false })
       console.log(`Deleted ${result.deletedCount} rows from ${table}`)
+    }
+  })
+
+// ── Config commands ─────────────────────────────────────────────────
+const config = program.command('config').description('OpenClaw config sync operations')
+
+config
+  .command('push')
+  .description('Push local openclaw.json to cloud storage')
+  .requiredOption('--agent <name>', 'Agent name (e.g., oracle, opal, kimklaw)')
+  .action(async (opts: { agent: string }) => {
+    try {
+      const result = await pushConfig(opts.agent)
+      console.log(`✓ Config pushed for ${opts.agent}`)
+      console.log(`  ID: ${result.id}`)
+      console.log(`  Version: ${result.version}`)
+    } catch (err) {
+      console.error(`Push failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('pull')
+  .description('Pull config from cloud and save to local openclaw.json')
+  .requiredOption('--agent <name>', 'Agent name to pull config for')
+  .action(async (opts: { agent: string }) => {
+    try {
+      const result = await pullConfig(opts.agent)
+      console.log(`✓ Config pulled for ${result.agent_name}`)
+      console.log(`  Version: ${result.version}`)
+      console.log(`  Updated: ${result.updated_at}`)
+      console.log(`\nSaved to: ~/.openclaw/openclaw.json`)
+    } catch (err) {
+      console.error(`Pull failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('list')
+  .description('List all saved agent configs in cloud')
+  .action(async () => {
+    try {
+      const configs = await listConfigs()
+      if (configs.length === 0) {
+        console.log('No configs found in cloud storage')
+        return
+      }
+      console.log('| Agent | Version | Updated |')
+      console.log('|-------|---------|---------|')
+      for (const c of configs) {
+        console.log(`| ${c.agent_name} | ${c.version.slice(0, 19)} | ${c.updated_at.slice(0, 19)} |`)
+      }
+      console.log(`\nTotal: ${configs.length} configs`)
+    } catch (err) {
+      console.error(`List failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('diff')
+  .description('Compare local config with cloud version')
+  .requiredOption('--agent <name>', 'Agent name to compare')
+  .action(async (opts: { agent: string }) => {
+    try {
+      const { local, cloud, differences } = await diffConfig(opts.agent)
+      
+      if (differences.length === 0) {
+        console.log('✓ Local and cloud configs are in sync')
+        return
+      }
+      
+      console.log('Differences found:')
+      for (const d of differences) {
+        console.log(`  • ${d}`)
+      }
+      
+      if ((local as any)?.meta?.lastTouchedAt) {
+        console.log(`\nLocal updated: ${(local as any).meta.lastTouchedAt}`)
+      }
+      if (cloud?.updated_at) {
+        console.log(`Cloud updated: ${cloud.updated_at}`)
+      }
+    } catch (err) {
+      console.error(`Diff failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('sync')
+  .description('Two-way sync: push if local is newer, pull if cloud is newer')
+  .requiredOption('--agent <name>', 'Agent name to sync')
+  .action(async (opts: { agent: string }) => {
+    try {
+      const result = await syncConfig(opts.agent)
+      console.log(`✓ ${result.action}`)
+      console.log(`  ${result.message}`)
+    } catch (err) {
+      console.error(`Sync failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
     }
   })
 
