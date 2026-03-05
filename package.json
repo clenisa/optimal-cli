@@ -1,12 +1,39 @@
 {
-  "name": "optimal-cli",
+  "name": "@clenisa/optimal-cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "Optimal CLI — unified command-line interface for agent config sync, financial analytics, content management, and infrastructure",
   "type": "module",
+  "main": "./dist/bin/optimal.js",
+  "bin": {
+    "optimal": "./dist/bin/optimal.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch bin/optimal.ts",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "cli",
+    "optimal",
+    "openclaw",
+    "supabase",
+    "agent-config",
+    "automation"
+  ],
+  "author": "Carlos Lenis <clenis@optimaltech.ai>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clenisa/optimal-cli.git"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
