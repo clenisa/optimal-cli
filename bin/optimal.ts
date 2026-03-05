@@ -20,7 +20,7 @@ import {
   exportToCSV,
   formatProjectionTable,
 } from '../lib/budget/projections.js'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { generateNewsletter } from '../lib/newsletter/generate.js'
 import { scrapeCompanies, formatCsv } from '../lib/social/scraper.js'
 import { ingestTransactions } from '../lib/transactions/ingest.js'
@@ -38,6 +38,17 @@ import { publishBlog, createBlogPost, listBlogDrafts } from '../lib/cms/publish-
 import { migrateDb, listPendingMigrations, createMigration } from '../lib/infra/migrate.js'
 import { saveScenario, loadScenario, listScenarios, compareScenarios, deleteScenario } from '../lib/budget/scenarios.js'
 import { deleteBatch, previewBatch } from '../lib/transactions/delete-batch.js'
+import { assertOptimalConfigV1, type OptimalConfigV1 } from '../lib/config/schema.js'
+import {
+  appendHistory,
+  getHistoryPath,
+  getLocalConfigPath,
+  hashConfig,
+  pullRegistryProfile,
+  pushRegistryProfile,
+  readLocalConfig,
+  writeLocalConfig,
+} from '../lib/config/registry.js'
 
 const program = new Command()
   .name('optimal')
@@ -978,6 +989,172 @@ program
       const result = await deleteBatch({ table, userId: opts.userId, filters, dryRun: false })
       console.log(`Deleted ${result.deletedCount} rows from ${table}`)
     }
+  })
+
+// ── Config registry (v1 scaffold) ─────────────────────────────────
+const config = program.command('config').description('Manage optimal-cli local/shared config profile')
+
+config
+  .command('init')
+  .description('Create a local config scaffold (overwrites with --force)')
+  .option('--owner <owner>', 'Config owner (default: $OPTIMAL_CONFIG_OWNER or $USER)')
+  .option('--profile <name>', 'Profile name', 'default')
+  .option('--brand <brand>', 'Default brand', 'CRE-11TRUST')
+  .option('--timezone <tz>', 'Default timezone', 'America/New_York')
+  .option('--force', 'Overwrite existing config', false)
+  .action(async (opts: { owner?: string; profile: string; brand: string; timezone: string; force?: boolean }) => {
+    try {
+      const existing = await readLocalConfig()
+      if (existing && !opts.force) {
+        console.error(`Config already exists at ${getLocalConfigPath()} (use --force to overwrite)`)
+        process.exit(1)
+      }
+
+      const owner = opts.owner || process.env.OPTIMAL_CONFIG_OWNER || process.env.USER || 'oracle'
+      const payload: OptimalConfigV1 = {
+        version: '1.0.0',
+        profile: {
+          name: opts.profile,
+          owner,
+          updated_at: new Date().toISOString(),
+        },
+        providers: {
+          supabase: {
+            project_ref: process.env.OPTIMAL_SUPABASE_PROJECT_REF || 'unset',
+            url: process.env.OPTIMAL_SUPABASE_URL || 'unset',
+            anon_key_present: Boolean(process.env.OPTIMAL_SUPABASE_ANON_KEY),
+          },
+          strapi: {
+            base_url: process.env.STRAPI_BASE_URL || 'unset',
+            token_present: Boolean(process.env.STRAPI_TOKEN),
+          },
+        },
+        defaults: {
+          brand: opts.brand,
+          timezone: opts.timezone,
+        },
+        features: {
+          cms: true,
+          tasks: true,
+          deploy: true,
+        },
+      }
+
+      await writeLocalConfig(payload)
+      await appendHistory(`${new Date().toISOString()} init profile=${opts.profile} owner=${owner} hash=${hashConfig(payload)}`)
+      console.log(`Initialized config at ${getLocalConfigPath()}`)
+    } catch (err) {
+      console.error(`Config init failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('doctor')
+  .description('Validate local config file and print health details')
+  .action(async () => {
+    try {
+      const cfg = await readLocalConfig()
+      if (!cfg) {
+        console.log(`No local config found at ${getLocalConfigPath()}`)
+        process.exit(1)
+      }
+      const digest = hashConfig(cfg)
+      console.log(`config: ok`)
+      console.log(`path: ${getLocalConfigPath()}`)
+      console.log(`profile: ${cfg.profile.name}`)
+      console.log(`owner: ${cfg.profile.owner}`)
+      console.log(`version: ${cfg.version}`)
+      console.log(`hash: ${digest}`)
+      console.log(`history: ${getHistoryPath()}`)
+    } catch (err) {
+      console.error(`Config doctor failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('export')
+  .description('Export local config to a JSON path')
+  .requiredOption('--out <path>', 'Output path for JSON export')
+  .action(async (opts: { out: string }) => {
+    try {
+      const cfg = await readLocalConfig()
+      if (!cfg) {
+        console.error(`No local config found at ${getLocalConfigPath()}`)
+        process.exit(1)
+      }
+      const payload: OptimalConfigV1 = {
+        ...cfg,
+        profile: {
+          ...cfg.profile,
+          updated_at: new Date().toISOString(),
+        },
+      }
+      const json = `${JSON.stringify(payload, null, 2)}\n`
+      writeFileSync(opts.out, json, 'utf-8')
+      await appendHistory(`${new Date().toISOString()} export out=${opts.out} hash=${hashConfig(payload)}`)
+      console.log(`Exported config to ${opts.out}`)
+    } catch (err) {
+      console.error(`Config export failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('import')
+  .description('Import local config from a JSON path')
+  .requiredOption('--in <path>', 'Input path for JSON config')
+  .action(async (opts: { in: string }) => {
+    try {
+      if (!existsSync(opts.in)) {
+        console.error(`Input file not found: ${opts.in}`)
+        process.exit(1)
+      }
+      const raw = readFileSync(opts.in, 'utf-8')
+      const parsed = JSON.parse(raw)
+      const payload = assertOptimalConfigV1(parsed)
+      await writeLocalConfig(payload)
+      await appendHistory(`${new Date().toISOString()} import in=${opts.in} hash=${hashConfig(payload)}`)
+      console.log(`Imported config from ${opts.in}`)
+    } catch (err) {
+      console.error(`Config import failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+const configSync = config.command('sync').description('Sync local profile with shared registry (scaffold)')
+
+configSync
+  .command('pull')
+  .description('Pull config profile from shared registry into local config')
+  .option('--profile <name>', 'Registry profile name', 'default')
+  .action(async (opts: { profile: string }) => {
+    const result = await pullRegistryProfile(opts.profile)
+    const stamp = new Date().toISOString()
+    await appendHistory(`${stamp} sync.pull profile=${opts.profile} ok=${result.ok} msg=${result.message}`)
+    if (!result.ok) {
+      console.error(result.message)
+      process.exit(1)
+    }
+    console.log(result.message)
+  })
+
+configSync
+  .command('push')
+  .description('Push local config profile to shared registry')
+  .requiredOption('--agent <name>', 'Agent/owner name for the config profile')
+  .option('--profile <name>', 'Registry profile name', 'default')
+  .option('--force', 'Force write even on conflict', false)
+  .action(async (opts: { agent: string; profile: string; force?: boolean }) => {
+    const result = await pushRegistryProfile(opts.profile, Boolean(opts.force), opts.agent)
+    const stamp = new Date().toISOString()
+    await appendHistory(`${stamp} sync.push agent=${opts.agent} profile=${opts.profile} force=${Boolean(opts.force)} ok=${result.ok} msg=${result.message}`)
+    if (!result.ok) {
+      console.error(result.message)
+      process.exit(1)
+    }
+    console.log(result.message)
   })
 
 program.parseAsync()

@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: enable corepack
+        run: corepack enable
+
+      - name: install deps
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: lint
+        run: corepack pnpm lint
+
+      - name: test
+        run: corepack pnpm test
