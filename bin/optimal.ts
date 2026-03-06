@@ -1157,4 +1157,98 @@ configSync
     console.log(result.message)
   })
 
+// ── Asset commands ──────────────────────────────────────────────────
+import { scanAllAssets, pushAssets, listAssets, getInventory } from '../lib/assets.js'
+
+const asset = program.command('asset').description('Asset tracking (skills, CLIs, repos, etc.)')
+
+asset
+  .command('scan')
+  .description('Scan local system for all assets')
+  .action(async () => {
+    try {
+      const assets = scanAllAssets()
+      console.log(`Found ${assets.length} assets:\n`)
+      
+      const byType = new Map<string, typeof assets>()
+      for (const a of assets) {
+        const list = byType.get(a.type) || []
+        list.push(a)
+        byType.set(a.type, list)
+      }
+      
+      for (const [type, list] of byType) {
+        console.log(`${type.toUpperCase()} (${list.length}):`)
+        for (const a of list) {
+          console.log(`  • ${a.name}${a.version ? ` @ ${a.version}` : ''}`)
+        }
+        console.log()
+      }
+    } catch (err) {
+      console.error(`Scan failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+asset
+  .command('push')
+  .description('Push all local assets to cloud')
+  .requiredOption('--agent <name>', 'Agent name')
+  .action(async (opts: { agent: string }) => {
+    try {
+      console.log('Scanning local assets...')
+      const result = await pushAssets(opts.agent)
+      console.log(`✓ Pushed ${result.pushed} new, updated ${result.updated}`)
+    } catch (err) {
+      console.error(`Push failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+asset
+  .command('list')
+  .description('List assets from cloud')
+  .option('--agent <name>', 'Filter by agent')
+  .option('--type <type>', 'Filter by type (skill, cli, repo, cron, env)')
+  .action(async (opts: { agent?: string; type?: string }) => {
+    try {
+      const assets = await listAssets(opts.agent)
+      const filtered = opts.type ? assets.filter((a: any) => a.asset_type === opts.type) : assets
+      
+      if (filtered.length === 0) {
+        console.log('No assets found')
+        return
+      }
+      
+      console.log('| Agent | Type | Name | Version | Updated |')
+      console.log('|-------|------|------|---------|---------|')
+      for (const a of filtered.slice(0, 50)) {
+        console.log(`| ${a.agent_name} | ${a.asset_type} | ${a.asset_name} | ${a.asset_version || '-'} | ${a.updated_at.slice(0, 19)} |`)
+      }
+      if (filtered.length > 50) {
+        console.log(`\n... and ${filtered.length - 50} more`)
+      }
+    } catch (err) {
+      console.error(`List failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+asset
+  .command('inventory')
+  .description('Show inventory summary for all agents')
+  .action(async () => {
+    try {
+      const inventory = await getInventory()
+      console.log('| Agent | Config | Assets | Skills | CLIs | Crons | Secrets |')
+      console.log('|-------|--------|--------|--------|------|-------|---------|')
+      for (const row of inventory) {
+        console.log(`| ${row.agent_name} | ${row.config_version?.slice(0, 10) || '-'} | ${row.asset_count} | ${row.skill_count} | ${row.cli_count} | ${row.cron_count} | ${row.secret_count} |`)
+      }
+    } catch (err) {
+      console.error(`Inventory failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
 program.parseAsync()
