@@ -1,14 +1,13 @@
 {
   "name": "optimal-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Optimal CLI — unified command-line interface for bot orchestration, financial analytics, content management, and infrastructure",
   "type": "module",
   "bin": {
-    "optimal": "./bin/optimal.ts"
+    "optimal": "./dist/bin/optimal.js"
   },
   "files": [
-    "bin/",
-    "lib/",
+    "dist/",
     "agents/",
     "docs/CLI-REFERENCE.md"
   ],
