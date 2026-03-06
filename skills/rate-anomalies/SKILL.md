@@ -19,7 +19,7 @@ Detects anomalous per-unit rates ($/unit) across programs and months in ReturnPr
 4. Calculate historical mean and standard deviation per program
 5. Flag any program-month where the rate's z-score exceeds the threshold
 6. Sort flagged anomalies by severity (highest z-score first)
-7. Log execution via `lib/kanban.ts::logSkillExecution()`
+7. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 Bloomberg-dense table with inline severity indicators:

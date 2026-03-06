@@ -42,7 +42,7 @@ The content-ops agent follows a **generate-review-publish-deploy** pipeline. Con
 2. Claim task          updateTask(taskId, { status: 'in_progress', assigned_agent: 'content-ops' })
 3. Log start           logActivity(taskId, { agent: 'content-ops', action: 'task_claimed', message: 'Starting...' })
 4. Execute skill       Run the skill referenced in task.skill_ref
-5. Log result          logSkillExecution(skillName, 'content-ops', { success, message, metadata })
+5. Log result          logActivity({actor, 'content-ops', { success, message, metadata })
 6. Complete/review     updateTask(taskId, { status: 'done' }) or { status: 'review' } if human approval needed
 7. Repeat              Loop back to step 1
 ```
@@ -150,7 +150,7 @@ while (true) {
   try {
     const result = await executeSkill(task.skill_ref, task.metadata)
 
-    await logSkillExecution(task.skill_ref, 'content-ops', {
+    await logActivity({actor, 'content-ops', {
       success: true,
       message: result.message,
       metadata: result

@@ -20,7 +20,7 @@ Triggers distribution of a published Strapi newsletter to subscribers via GoHigh
 6. **n8n workflow handles**: GHL campaign creation, recipient targeting by brand, email send, 3x retry on failures
 7. **Poll for delivery status** — check newsletter's `delivery_status` field (pending → sending → delivered/partial/failed) with 10s intervals, timeout after 5 minutes
 8. **Update Strapi** — `strapiPut('/api/newsletters', documentId, { delivery_status, delivered_at, recipients_count })` (done by n8n, but verify here)
-9. Log execution via `lib/kanban.ts::logSkillExecution()`
+9. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

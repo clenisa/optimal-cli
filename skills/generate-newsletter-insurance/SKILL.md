@@ -19,7 +19,7 @@ Generates a branded newsletter for Anchor Point Insurance Co. (brand=LIFEINSUR).
 5. **Build HTML** — `buildHtml()` assembles responsive email-safe HTML with Anchor Point brand colors and insurance-specific sections
 6. **Build Strapi payload** — `buildStrapiPayload()` with brand=`LIFEINSUR`, slug includes timestamp for uniqueness
 7. **Push to Strapi** — `strapiPost('/api/newsletters', data)` creates a draft newsletter (skipped in dry-run mode)
-8. Log execution via `lib/kanban.ts::logSkillExecution()`
+8. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

@@ -18,7 +18,7 @@ Uploads R1 reverse-logistics XLSX files into ReturnPro's financial staging table
 4. Aggregate rows by `master_program_id` + `account_code` within the target month
 5. Resolve program names to `dim_master_program.id` via fuzzy match
 6. Upsert aggregated rows into `stg_financials_raw` (keyed on account_code + month + master_program_id)
-7. Log execution via `lib/kanban.ts::logSkillExecution()`
+7. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

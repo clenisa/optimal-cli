@@ -19,7 +19,7 @@ Uploads confirmed income statement CSVs (exported from NetSuite) into `confirmed
 5. Batch-insert rows into `confirmed_income_statements`
 6. Run a quick accuracy check against `stg_financials_raw` for the uploaded month (same logic as audit-financials)
 7. Report accuracy inline so Carlos immediately knows the data state
-8. Log execution via `lib/kanban.ts::logSkillExecution()`
+8. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

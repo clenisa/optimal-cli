@@ -14,8 +14,8 @@ Moves tasks through the kanban lifecycle. Agents call this to claim work, mark c
 - **message** (optional): Log message describing the update
 
 ## Steps
-1. Call `lib/kanban.ts::updateTask(taskId, updates)`
-2. Call `lib/kanban.ts::logActivity(taskId, { agent, action: 'status_change', message })`
+1. Call `lib/board/index.ts::updateTask(taskId, updates)`
+2. Call `lib/board/index.ts::logActivity(taskId, { agent, action: 'status_change', message })`
 3. Return updated task summary
 
 ## Output

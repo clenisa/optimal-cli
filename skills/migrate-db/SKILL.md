@@ -21,7 +21,7 @@ Executes pending database migrations against the linked Supabase instance using 
 4. **List pending** — show which migrations haven't been applied yet
 5. **Push** — run `supabase db push --linked` from the appropriate project directory
 6. **Verify** — confirm migration was applied successfully
-7. Log execution via `lib/kanban.ts::logSkillExecution()`
+7. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

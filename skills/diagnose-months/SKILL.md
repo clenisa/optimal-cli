@@ -19,7 +19,7 @@ Diagnoses data quality issues in `stg_financials_raw` by scanning for foreign ke
 3. Count rows per month and compare against expected baseline (~88-93 accounts/month for staging)
 4. Identify months with zero staging data (data gaps)
 5. Summarize failures by type and month
-6. Log execution via `lib/kanban.ts::logSkillExecution()`
+6. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 Summary table:

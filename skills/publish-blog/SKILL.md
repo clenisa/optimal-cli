@@ -23,7 +23,7 @@ End-to-end blog publishing workflow: creates or updates a blog post in Strapi CM
 4. **Publish** — unless `--draft` is set, call `publish('blog-posts', documentId)`
 5. **Deploy** — unless `--deploy false`, call `lib/infra/deploy.ts::deploy('portfolio', { prod: true })` to push to Vercel production
 6. **Return** — documentId, slug, and live URL
-7. Log execution via `lib/kanban.ts::logSkillExecution()`
+7. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

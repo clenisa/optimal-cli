@@ -15,7 +15,7 @@ Deploys the newsletter-preview Next.js site to Vercel so clients and stakeholder
 3. Runs `vercel --cwd /home/optimal/projects/newsletter-preview` (or `vercel --prod` for production)
 4. Waits for deployment to complete (up to 2 minutes)
 5. Returns the deployment URL
-6. Log execution via `lib/kanban.ts::logSkillExecution()`
+6. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

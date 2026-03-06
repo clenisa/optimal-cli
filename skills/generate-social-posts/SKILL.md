@@ -21,7 +21,7 @@ End-to-end social media post generation pipeline. Scrapes competitor ads from Me
 5. **Source photos** — for each post theme, search Unsplash via `unsplash.com/napi/search/photos?query=X&per_page=3` and select the best match
 6. **Build Strapi payloads** — create `social-post` entries with all fields: brand, headline, body, cta_text, cta_url, image_url, overlay_style, template, scheduled_date, competitor_ref, platform, delivery_status=pending
 7. **Push to Strapi** — `strapiPost('/api/social-posts', data)` for each post (skipped in dry-run mode)
-8. Log execution via `lib/kanban.ts::logSkillExecution()`
+8. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

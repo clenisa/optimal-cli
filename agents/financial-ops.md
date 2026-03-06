@@ -43,7 +43,7 @@ The financial-ops agent follows a strict **upload-then-verify** pattern. Every d
 3. Log start           logActivity(taskId, { agent: 'financial-ops', action: 'task_claimed', message: 'Starting...' })
 4. Execute skill       Run the skill referenced in task.skill_ref
 5. Post-action audit   If the skill mutated data, run /audit-financials automatically
-6. Log result          logSkillExecution(skillName, 'financial-ops', { success, message, metadata })
+6. Log result          logActivity({actor, 'financial-ops', { success, message, metadata })
 7. Complete task        updateTask(taskId, { status: 'done' })
 8. Repeat              Loop back to step 1
 ```
@@ -124,7 +124,7 @@ while (true) {
       })
     }
 
-    await logSkillExecution(task.skill_ref, 'financial-ops', {
+    await logActivity({actor, 'financial-ops', {
       success: true,
       message: result.message,
       metadata: result

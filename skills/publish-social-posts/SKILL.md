@@ -23,7 +23,7 @@ Publishes social post drafts from Strapi CMS to their target platforms (Instagra
    - Updates `delivery_status` (pending → scheduled/delivered/failed)
    - Writes `platform_post_id` back to Strapi on success
 6. **Report results** — summarize published vs scheduled vs failed
-7. Log execution via `lib/kanban.ts::logSkillExecution()`
+7. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

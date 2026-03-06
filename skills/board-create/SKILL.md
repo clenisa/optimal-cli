@@ -16,7 +16,7 @@ Adds a new task to the project board. Agents use this to break work into trackab
 - **blocked_by** (optional): Comma-separated task IDs that must complete first
 
 ## Steps
-1. Call `lib/kanban.ts::createTask(input)` with provided params
+1. Call `lib/board/index.ts::createTask(input)` with provided params
 2. Return the created task ID and title
 
 ## Output

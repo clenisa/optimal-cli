@@ -19,7 +19,7 @@ Uploads NetSuite financial exports (XLSM macro-enabled workbooks or CSV files) i
 5. Parse rows into staging format: `account_code`, `account_name`, `amount` (as TEXT), `period` (YYYY-MM), `source_file`
 6. Resolve account codes against `dim_account` for validation
 7. Batch-upsert into `stg_financials_raw` (keyed on account_code + period + master_program_id)
-8. Log execution via `lib/kanban.ts::logSkillExecution()`
+8. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

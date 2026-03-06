@@ -11,7 +11,7 @@ Shows all tasks for a project grouped by status column. Use this to check what w
 - **status** (optional): Filter to a single status column (backlog, ready, in_progress, blocked, review, done)
 
 ## Steps
-1. Call `lib/kanban.ts::getBoard(projectSlug)` to fetch all tasks
+1. Call `lib/board/index.ts::listTasks(projectSlug)` to fetch all tasks
 2. Group tasks by status
 3. Format as a markdown table with columns: Status | Priority | Title | Agent | Skill
 

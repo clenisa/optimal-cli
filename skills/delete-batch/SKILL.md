@@ -23,7 +23,7 @@ Performs bulk deletion of transactions from OptimalOS's `transactions` table bas
 6. **Audit log** — insert a record into `cli_task_logs` with deletion details (filter, count, timestamp)
 7. **Delete** — `DELETE FROM transactions WHERE <filters>` in batches of 100
 8. **Clean up batches** — if `--batch-id` used, update `upload_batches.status` to `deleted`
-9. Log execution via `lib/kanban.ts::logSkillExecution()`
+9. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

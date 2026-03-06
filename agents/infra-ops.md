@@ -33,7 +33,7 @@ The infra-ops agent follows a **check-then-act** pattern. It verifies system hea
 3. Log start           logActivity(taskId, { agent: 'infra-ops', action: 'task_claimed', message: 'Starting...' })
 4. Execute skill       Run the skill referenced in task.skill_ref
 5. Post-deploy check   If the skill was a deploy, run /health-check to verify
-6. Log result          logSkillExecution(skillName, 'infra-ops', { success, message, metadata })
+6. Log result          logActivity({actor, 'infra-ops', { success, message, metadata })
 7. Complete task        updateTask(taskId, { status: 'done' })
 8. Repeat              Loop back to step 1
 ```
@@ -118,7 +118,7 @@ while (true) {
     // Execute the primary skill
     const result = await executeSkill(task.skill_ref, task.metadata)
 
-    await logSkillExecution(task.skill_ref, 'infra-ops', {
+    await logActivity({actor, 'infra-ops', {
       success: true,
       message: result.message,
       metadata: result

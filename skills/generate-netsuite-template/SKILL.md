@@ -19,7 +19,7 @@ Creates a blank upload template (XLSX or CSV) pre-populated with valid account c
 4. Build template structure: one row per account_code, columns for period, account_code, account_name, amount (blank), master_program_id, program_name
 5. If `--programs` filter given, only include matching programs
 6. Write to disk as XLSX (with header formatting) or CSV
-7. Log execution via `lib/kanban.ts::logSkillExecution()`
+7. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 ```

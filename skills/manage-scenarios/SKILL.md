@@ -21,7 +21,7 @@ Manages named budget scenarios for the Wes dashboard budget projection system. S
 4. **list**: Show all saved scenarios with name, created_at, fiscal_year, row_count, user
 5. **compare**: Load two scenarios side-by-side and compute deltas — total units, revenue projection, per-program differences
 6. **delete**: Remove a named scenario (with confirmation)
-7. Log execution via `lib/kanban.ts::logSkillExecution()`
+7. Log execution via `lib/board/index.ts::logActivity()`
 
 ## Output
 **list**:
