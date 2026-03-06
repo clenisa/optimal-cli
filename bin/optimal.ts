@@ -38,6 +38,8 @@ import { distributeNewsletter, checkDistributionStatus } from '../lib/newsletter
 import { generateSocialPosts } from '../lib/social/post-generator.js'
 import { publishSocialPosts, getPublishQueue, retryFailed } from '../lib/social/publish.js'
 import { publishBlog, createBlogPost, listBlogDrafts } from '../lib/cms/publish-blog.js'
+import { publishIgPhoto, getMetaConfigForBrand } from '../lib/social/meta.js'
+import { strapiGet, strapiPut, type StrapiPage } from '../lib/cms/strapi-client.js'
 import { migrateDb, listPendingMigrations, createMigration } from '../lib/infra/migrate.js'
 import { saveScenario, loadScenario, listScenarios, compareScenarios, deleteScenario } from '../lib/budget/scenarios.js'
 import { deleteBatch, previewBatch } from '../lib/transactions/delete-batch.js'
@@ -52,14 +54,53 @@ import {
   readLocalConfig,
   writeLocalConfig,
 } from '../lib/config/registry.js'
+import {
+  sendHeartbeat, getActiveAgents,
+  claimNextTask, releaseTask,
+  reportProgress, reportCompletion, reportBlocked,
+  runCoordinatorLoop, getCoordinatorStatus, assignTask, rebalance,
+} from '../lib/bot/index.js'
+import {
+  colorize, table as fmtTable, statusBadge, priorityBadge,
+  success, error as fmtError, warn as fmtWarn, info as fmtInfo,
+} from '../lib/format.js'
+import {
+  listAssets, createAsset, updateAsset, getAsset, deleteAsset,
+  trackAssetUsage, listAssetUsage, formatAssetTable,
+  type AssetType, type AssetStatus,
+} from '../lib/assets/index.js'
 
 const program = new Command()
   .name('optimal')
   .description('Optimal CLI — unified skills for financial analytics, content, and infra')
   .version('0.1.0')
+  .addHelpText('after', `
+Examples:
+  $ optimal board view                              View the kanban board
+  $ optimal board view -s in_progress               Filter board by status
+  $ optimal board claim --id <uuid> --agent bot1     Claim a task
+  $ optimal project list                            List all projects
+  $ optimal publish-instagram --brand CRE-11TRUST   Publish to Instagram
+  $ optimal social-queue --brand CRE-11TRUST        View social post queue
+  $ optimal generate-newsletter --brand CRE-11TRUST Generate a newsletter
+  $ optimal audit-financials --months 2025-01        Audit a single month
+  $ optimal export-kpis --format csv > kpis.csv      Export KPIs as CSV
+  $ optimal deploy dashboard --prod                  Deploy to production
+  $ optimal bot agents                              List active bot agents
+  $ optimal config doctor                           Validate local config
+`)
 
 // --- Board commands ---
 const board = program.command('board').description('Kanban board operations')
+  .addHelpText('after', `
+Examples:
+  $ optimal board view                        Show full board
+  $ optimal board view -p cli-consolidation   Filter by project
+  $ optimal board view -s ready --mine bot1   Show bot1's ready tasks
+  $ optimal board create -t "Fix bug" -p cli-consolidation
+  $ optimal board claim --id <uuid> --agent bot1
+  $ optimal board log --actor bot1 --limit 5
+`)
 
 board
   .command('view')
@@ -82,6 +123,10 @@ board
 board
   .command('create')
   .description('Create a new task')
+  .addHelpText('after', `
+Example:
+  $ optimal board create -t "Migrate auth" -p cli-consolidation --priority 1 --labels infra,migration
+`)
   .requiredOption('-t, --title <title>', 'Task title')
   .requiredOption('-p, --project <slug>', 'Project slug')
   .option('-d, --description <desc>', 'Task description')
@@ -106,7 +151,7 @@ board
       blocked_by: opts.blockedBy?.split(',') ?? [],
       labels: opts.labels?.split(',') ?? [],
     })
-    console.log(`Created task: ${task.id}\n  ${task.title} [${task.status}] P${task.priority}`)
+    success(`Created task: ${colorize(task.id, 'dim')}\n  ${task.title} [${statusBadge(task.status)}] ${priorityBadge(task.priority)}`)
   })
 
 board
@@ -125,7 +170,7 @@ board
     if (opts.status === 'done') updates.completed_at = new Date().toISOString()
     const task = await updateTask(opts.id, updates, opts.agent ?? 'cli')
     if (opts.message) await addComment({ task_id: task.id, author: opts.agent ?? 'cli', body: opts.message })
-    console.log(`Updated: ${task.title} -> ${task.status}`)
+    success(`Updated: ${task.title} -> ${statusBadge(task.status)}`)
   })
 
 board
@@ -135,7 +180,7 @@ board
   .requiredOption('--agent <name>', 'Agent name')
   .action(async (opts) => {
     const task = await claimTask(opts.id, opts.agent)
-    console.log(`Claimed: ${task.title} by ${opts.agent}`)
+    success(`Claimed: ${colorize(task.title, 'cyan')} by ${colorize(opts.agent, 'bold')}`)
   })
 
 board
@@ -146,7 +191,7 @@ board
   .requiredOption('--body <text>', 'Comment body')
   .action(async (opts) => {
     const comment = await addComment({ task_id: opts.id, author: opts.author, body: opts.body })
-    console.log(`Comment added by ${comment.author} at ${comment.created_at}`)
+    success(`Comment added by ${colorize(comment.author, 'bold')} at ${colorize(comment.created_at, 'dim')}`)
   })
 
 board
@@ -169,6 +214,12 @@ board
 
 // --- Project commands ---
 const proj = program.command('project').description('Project management')
+  .addHelpText('after', `
+Examples:
+  $ optimal project list
+  $ optimal project create --slug my-proj --name "My Project" --priority 1
+  $ optimal project update --slug my-proj -s active
+`)
 
 proj
   .command('list')
@@ -196,7 +247,7 @@ proj
       owner: opts.owner,
       priority: parseInt(opts.priority) as 1 | 2 | 3 | 4,
     })
-    console.log(`Created project: ${p.slug} (${p.id})`)
+    success(`Created project: ${colorize(p.slug, 'cyan')} (${colorize(p.id, 'dim')})`)
   })
 
 proj
@@ -210,11 +261,16 @@ proj
     if (opts.status) updates.status = opts.status
     if (opts.owner) updates.owner = opts.owner
     const p = await updateProject(opts.slug, updates)
-    console.log(`Updated project: ${p.slug} -> ${p.status}`)
+    success(`Updated project: ${colorize(p.slug, 'cyan')} -> ${statusBadge(p.status)}`)
   })
 
 // --- Milestone commands ---
 const ms = program.command('milestone').description('Milestone management')
+  .addHelpText('after', `
+Examples:
+  $ optimal milestone list --project cli-consolidation
+  $ optimal milestone create --project cli-consolidation --name "v1.0" --due 2026-04-01
+`)
 
 ms
   .command('create')
@@ -225,7 +281,7 @@ ms
   .action(async (opts) => {
     const project = await getProjectBySlug(opts.project)
     const m = await createMilestone({ project_id: project.id, name: opts.name, due_date: opts.due })
-    console.log(`Created milestone: ${m.name} (${m.id})`)
+    success(`Created milestone: ${colorize(m.name, 'cyan')} (${colorize(m.id, 'dim')})`)
   })
 
 ms
@@ -254,7 +310,7 @@ lbl
   .option('--color <hex>', 'Color hex code')
   .action(async (opts) => {
     const l = await createLabel(opts.name, opts.color)
-    console.log(`Created label: ${l.name} (${l.id})`)
+    success(`Created label: ${colorize(l.name, 'cyan')} (${colorize(l.id, 'dim')})`)
   })
 
 lbl
@@ -370,13 +426,13 @@ program
   .argument('<app>', `App to deploy (${listApps().join(', ')})`)
   .option('--prod', 'Deploy to production', false)
   .action(async (app: string, opts: { prod: boolean }) => {
-    console.log(`Deploying ${app}${opts.prod ? ' (production)' : ' (preview)'}...`)
+    fmtInfo(`Deploying ${colorize(app, 'cyan')}${opts.prod ? colorize(' (production)', 'yellow') : ' (preview)'}...`)
     try {
       const url = await deploy(app, opts.prod)
-      console.log(`Deployed: ${url}`)
+      success(`Deployed: ${colorize(url, 'green')}`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`Deploy failed: ${msg}`)
+      fmtError(`Deploy failed: ${msg}`)
       process.exit(1)
     }
   })
@@ -506,11 +562,11 @@ program
       })
 
       if (result.strapiDocumentId) {
-        console.log(`\nStrapi documentId: ${result.strapiDocumentId}`)
+        success(`Strapi documentId: ${colorize(result.strapiDocumentId, 'cyan')}`)
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`Newsletter generation failed: ${msg}`)
+      fmtError(`Newsletter generation failed: ${msg}`)
       process.exit(1)
     }
   })
@@ -900,6 +956,78 @@ program
     console.log(`\n${queue.length} posts queued`)
   })
 
+// ── Publish to Instagram via Meta Graph API ─────────────────────────
+program
+  .command('publish-instagram')
+  .description('Publish pending social posts to Instagram via Meta Graph API')
+  .requiredOption('--brand <brand>', 'Brand: CRE-11TRUST or LIFEINSUR')
+  .option('--limit <n>', 'Max posts to publish')
+  .option('--dry-run', 'Preview without publishing', false)
+  .action(async (opts: { brand: string; limit?: string; dryRun: boolean }) => {
+    try {
+      const config = getMetaConfigForBrand(opts.brand)
+
+      // Fetch pending instagram posts from Strapi
+      const result = await strapiGet<StrapiPage>('/api/social-posts', {
+        'filters[brand][$eq]': opts.brand,
+        'filters[delivery_status][$eq]': 'pending',
+        'filters[platform][$eq]': 'instagram',
+        'sort': 'scheduled_date:asc',
+        'pagination[pageSize]': opts.limit ?? '50',
+      })
+
+      const posts = result.data
+      if (posts.length === 0) {
+        console.log('No pending Instagram posts found')
+        return
+      }
+
+      console.log(`Found ${posts.length} pending Instagram post(s) for ${opts.brand}`)
+      let published = 0
+      let failed = 0
+
+      for (const post of posts) {
+        const headline = (post.headline as string) ?? '(no headline)'
+        const imageUrl = post.image_url as string | undefined
+        const caption = ((post.body as string) ?? (post.headline as string) ?? '').trim()
+
+        if (!imageUrl) {
+          console.log(`  SKIP | ${headline} — no image_url`)
+          failed++
+          continue
+        }
+
+        if (opts.dryRun) {
+          console.log(`  DRY  | ${headline}`)
+          continue
+        }
+
+        try {
+          const igResult = await publishIgPhoto(config, { imageUrl, caption })
+          await strapiPut('/api/social-posts', post.documentId, {
+            delivery_status: 'delivered',
+            platform_post_id: igResult.mediaId,
+          })
+          console.log(`  OK   | ${headline} → ${igResult.mediaId}`)
+          published++
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err)
+          await strapiPut('/api/social-posts', post.documentId, {
+            delivery_status: 'failed',
+            delivery_errors: [{ timestamp: new Date().toISOString(), error: errMsg }],
+          }).catch(() => {})
+          console.log(`  FAIL | ${headline} — ${errMsg}`)
+          failed++
+        }
+      }
+
+      console.log(`\nPublished: ${published} | Failed: ${failed}${opts.dryRun ? ' | (dry run)' : ''}`)
+    } catch (err) {
+      console.error(`Instagram publish failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
 // ── Publish blog ────────────────────────────────────────────────────
 program
   .command('publish-blog')
@@ -937,6 +1065,12 @@ program
 
 // ── Database migration ──────────────────────────────────────────────
 const migrate = program.command('migrate').description('Supabase database migration operations')
+  .addHelpText('after', `
+Examples:
+  $ optimal migrate pending --target optimalos
+  $ optimal migrate push --target returnpro --dry-run
+  $ optimal migrate create --target optimalos --name "add-index"
+`)
 
 migrate
   .command('push')
@@ -985,6 +1119,13 @@ migrate
 
 // ── Budget scenarios ────────────────────────────────────────────────
 const scenario = program.command('scenario').description('Budget scenario management')
+  .addHelpText('after', `
+Examples:
+  $ optimal scenario list
+  $ optimal scenario save --name "4pct-growth" --adjustment-type percentage --adjustment-value 4
+  $ optimal scenario compare --names "baseline,4pct-growth"
+  $ optimal scenario delete --name "old-scenario"
+`)
 
 scenario
   .command('save')
@@ -1124,6 +1265,15 @@ program
 
 // ── Config registry (v1 scaffold) ─────────────────────────────────
 const config = program.command('config').description('Manage optimal-cli local/shared config profile')
+  .addHelpText('after', `
+Examples:
+  $ optimal config init --owner oracle --brand CRE-11TRUST
+  $ optimal config doctor
+  $ optimal config export --out ./backup.json
+  $ optimal config import --in ./backup.json
+  $ optimal config sync pull
+  $ optimal config sync push --agent bot1
+`)
 
 config
   .command('init')
@@ -1288,98 +1438,294 @@ configSync
     console.log(result.message)
   })
 
-// ── Asset commands ──────────────────────────────────────────────────
-import { scanAllAssets, pushAssets, listAssets, getInventory } from '../lib/assets.js'
+// --- Bot commands ---
+const bot = program.command('bot').description('Bot agent orchestration')
+  .addHelpText('after', `
+Examples:
+  $ optimal bot agents                           List active agents
+  $ optimal bot heartbeat --agent bot1            Send heartbeat
+  $ optimal bot claim --agent bot1                Claim next task
+  $ optimal bot report --task <id> --agent bot1 --message "50% done"
+  $ optimal bot complete --task <id> --agent bot1 --summary "All tests pass"
+`)
 
-const asset = program.command('asset').description('Asset tracking (skills, CLIs, repos, etc.)')
+bot
+  .command('heartbeat')
+  .description('Send agent heartbeat')
+  .requiredOption('--agent <id>', 'Agent ID')
+  .option('--status <s>', 'Status: idle, working, error', 'idle')
+  .action(async (opts) => {
+    await sendHeartbeat(opts.agent, opts.status as 'idle' | 'working' | 'error')
+    success(`Heartbeat sent: ${colorize(opts.agent, 'bold')} [${colorize(opts.status, 'cyan')}]`)
+  })
 
-asset
-  .command('scan')
-  .description('Scan local system for all assets')
+bot
+  .command('agents')
+  .description('List active agents (heartbeat in last 5 min)')
   .action(async () => {
-    try {
-      const assets = scanAllAssets()
-      console.log(`Found ${assets.length} assets:\n`)
-      
-      const byType = new Map<string, typeof assets>()
-      for (const a of assets) {
-        const list = byType.get(a.type) || []
-        list.push(a)
-        byType.set(a.type, list)
-      }
-      
-      for (const [type, list] of byType) {
-        console.log(`${type.toUpperCase()} (${list.length}):`)
-        for (const a of list) {
-          console.log(`  • ${a.name}${a.version ? ` @ ${a.version}` : ''}`)
-        }
-        console.log()
-      }
-    } catch (err) {
-      console.error(`Scan failed: ${err instanceof Error ? err.message : String(err)}`)
-      process.exit(1)
+    const agents = await getActiveAgents()
+    if (agents.length === 0) {
+      console.log('No active agents.')
+      return
+    }
+    console.log('| Agent            | Status  | Last Seen           |')
+    console.log('|------------------|---------|---------------------|')
+    for (const a of agents) {
+      console.log(`| ${a.agent.padEnd(16)} | ${a.status.padEnd(7)} | ${a.lastSeen} |`)
     }
   })
 
-asset
-  .command('push')
-  .description('Push all local assets to cloud')
-  .requiredOption('--agent <name>', 'Agent name')
-  .action(async (opts: { agent: string }) => {
-    try {
-      console.log('Scanning local assets...')
-      const result = await pushAssets(opts.agent)
-      console.log(`✓ Pushed ${result.pushed} new, updated ${result.updated}`)
-    } catch (err) {
-      console.error(`Push failed: ${err instanceof Error ? err.message : String(err)}`)
-      process.exit(1)
+bot
+  .command('claim')
+  .description('Claim the next available task')
+  .requiredOption('--agent <id>', 'Agent ID')
+  .option('--skill <s>', 'Skill filter (comma-separated)')
+  .action(async (opts) => {
+    const skills = opts.skill ? opts.skill.split(',') : undefined
+    const task = await claimNextTask(opts.agent, skills)
+    if (!task) {
+      console.log('No claimable tasks found.')
+      return
+    }
+    success(`Claimed: ${colorize(task.title, 'cyan')} (${colorize(task.id, 'dim')}) by ${colorize(opts.agent, 'bold')}`)
+  })
+
+bot
+  .command('report')
+  .description('Report progress on a task')
+  .requiredOption('--task <id>', 'Task ID')
+  .requiredOption('--agent <id>', 'Agent ID')
+  .requiredOption('--message <msg>', 'Progress message')
+  .action(async (opts) => {
+    await reportProgress(opts.task, opts.agent, opts.message)
+    success(`Progress reported on ${colorize(opts.task, 'dim')}`)
+  })
+
+bot
+  .command('complete')
+  .description('Mark a task as done')
+  .requiredOption('--task <id>', 'Task ID')
+  .requiredOption('--agent <id>', 'Agent ID')
+  .requiredOption('--summary <s>', 'Completion summary')
+  .action(async (opts) => {
+    await reportCompletion(opts.task, opts.agent, opts.summary)
+    success(`Task ${colorize(opts.task, 'dim')} marked ${statusBadge('done')} by ${colorize(opts.agent, 'bold')}`)
+  })
+
+bot
+  .command('release')
+  .description('Release a claimed task back to ready')
+  .requiredOption('--task <id>', 'Task ID')
+  .requiredOption('--agent <id>', 'Agent ID')
+  .option('--reason <r>', 'Release reason')
+  .action(async (opts) => {
+    await releaseTask(opts.task, opts.agent, opts.reason)
+    fmtInfo(`Task ${colorize(opts.task, 'dim')} released by ${colorize(opts.agent, 'bold')}`)
+  })
+
+bot
+  .command('blocked')
+  .description('Mark a task as blocked')
+  .requiredOption('--task <id>', 'Task ID')
+  .requiredOption('--agent <id>', 'Agent ID')
+  .requiredOption('--reason <r>', 'Block reason')
+  .action(async (opts) => {
+    await reportBlocked(opts.task, opts.agent, opts.reason)
+    fmtWarn(`Task ${colorize(opts.task, 'dim')} marked ${statusBadge('blocked')}: ${opts.reason}`)
+  })
+
+// --- Coordinator commands ---
+const coordinator = program.command('coordinator').description('Multi-agent coordination')
+  .addHelpText('after', `
+Examples:
+  $ optimal coordinator start                        Run coordinator loop
+  $ optimal coordinator start --interval 10000       Poll every 10s
+  $ optimal coordinator status                       Show coordinator status
+  $ optimal coordinator assign --task <id> --agent bot1
+  $ optimal coordinator rebalance                    Release stale tasks
+`)
+
+coordinator
+  .command('start')
+  .description('Run the coordinator loop')
+  .option('--interval <ms>', 'Poll interval in milliseconds', '30000')
+  .option('--max-agents <n>', 'Maximum agents to manage', '10')
+  .action(async (opts) => {
+    await runCoordinatorLoop({
+      pollIntervalMs: parseInt(opts.interval),
+      maxAgents: parseInt(opts.maxAgents),
+    })
+  })
+
+coordinator
+  .command('status')
+  .description('Show coordinator status')
+  .action(async () => {
+    const s = await getCoordinatorStatus()
+    console.log(`Last poll: ${s.lastPollAt ?? 'never'}`)
+    console.log(`Tasks — ready: ${s.tasksReady}, in progress: ${s.tasksInProgress}, blocked: ${s.tasksBlocked}`)
+    console.log(`\nActive agents (${s.activeAgents.length}):`)
+    for (const a of s.activeAgents) {
+      console.log(`  ${a.agent.padEnd(16)} ${a.status.padEnd(8)} last seen ${a.lastSeen}`)
+    }
+    console.log(`\nIdle agents (${s.idleAgents.length}):`)
+    for (const a of s.idleAgents) {
+      console.log(`  ${a.id.padEnd(16)} skills: ${a.skills.join(', ')}`)
     }
   })
+
+coordinator
+  .command('assign')
+  .description('Manually assign a task to an agent')
+  .requiredOption('--task <id>', 'Task ID')
+  .requiredOption('--agent <id>', 'Agent ID')
+  .action(async (opts) => {
+    const task = await assignTask(opts.task, opts.agent)
+    success(`Assigned: ${colorize(task.title, 'cyan')} -> ${colorize(opts.agent, 'bold')}`)
+  })
+
+coordinator
+  .command('rebalance')
+  .description('Release stale tasks and rebalance')
+  .action(async () => {
+    const result = await rebalance()
+    if (result.releasedTasks.length === 0) {
+      fmtInfo('No stale tasks found.')
+      return
+    }
+    console.log(`Released ${result.releasedTasks.length} stale task(s):`)
+    for (const t of result.releasedTasks) {
+      console.log(`  ${colorize(t.id, 'dim')} ${t.title}`)
+    }
+    if (result.reassignedTasks.length > 0) {
+      console.log(`Reassigned ${result.reassignedTasks.length} task(s):`)
+      for (const t of result.reassignedTasks) {
+        console.log(`  ${colorize(t.id, 'dim')} ${t.title} -> ${t.claimed_by}`)
+      }
+    }
+  })
+
+// --- Asset commands ---
+const asset = program.command('asset').description('Digital asset tracking (domains, servers, API keys, services, repos)')
+  .addHelpText('after', `
+Examples:
+  $ optimal asset list                                 List all assets
+  $ optimal asset list --type domain --status active   Filter by type/status
+  $ optimal asset add --name "op-hub.com" --type domain --owner clenisa
+  $ optimal asset update --id <uuid> --status inactive
+  $ optimal asset usage --id <uuid>                    View usage log
+`)
 
 asset
   .command('list')
-  .description('List assets from cloud')
-  .option('--agent <name>', 'Filter by agent')
-  .option('--type <type>', 'Filter by type (skill, cli, repo, cron, env)')
-  .action(async (opts: { agent?: string; type?: string }) => {
-    try {
-      const assets = await listAssets(opts.agent)
-      const filtered = opts.type ? assets.filter((a: any) => a.asset_type === opts.type) : assets
-      
-      if (filtered.length === 0) {
-        console.log('No assets found')
-        return
-      }
-      
-      console.log('| Agent | Type | Name | Version | Updated |')
-      console.log('|-------|------|------|---------|---------|')
-      for (const a of filtered.slice(0, 50)) {
-        console.log(`| ${a.agent_name} | ${a.asset_type} | ${a.asset_name} | ${a.asset_version || '-'} | ${a.updated_at.slice(0, 19)} |`)
-      }
-      if (filtered.length > 50) {
-        console.log(`\n... and ${filtered.length - 50} more`)
-      }
-    } catch (err) {
-      console.error(`List failed: ${err instanceof Error ? err.message : String(err)}`)
-      process.exit(1)
+  .description('List tracked assets')
+  .option('-t, --type <type>', 'Filter by type (domain, server, api_key, service, repo, other)')
+  .option('-s, --status <status>', 'Filter by status (active, inactive, expired, pending)')
+  .option('-o, --owner <owner>', 'Filter by owner')
+  .option('--json', 'Output as JSON')
+  .action(async (opts) => {
+    const assets = await listAssets({
+      type: opts.type as AssetType | undefined,
+      status: opts.status as AssetStatus | undefined,
+      owner: opts.owner,
+    })
+    if (opts.json) {
+      console.log(JSON.stringify(assets, null, 2))
+    } else {
+      console.log(formatAssetTable(assets))
     }
   })
 
 asset
-  .command('inventory')
-  .description('Show inventory summary for all agents')
-  .action(async () => {
-    try {
-      const inventory = await getInventory()
-      console.log('| Agent | Config | Assets | Skills | CLIs | Crons | Secrets |')
-      console.log('|-------|--------|--------|--------|------|-------|---------|')
-      for (const row of inventory) {
-        console.log(`| ${row.agent_name} | ${row.config_version?.slice(0, 10) || '-'} | ${row.asset_count} | ${row.skill_count} | ${row.cli_count} | ${row.cron_count} | ${row.secret_count} |`)
-      }
-    } catch (err) {
-      console.error(`Inventory failed: ${err instanceof Error ? err.message : String(err)}`)
-      process.exit(1)
+  .command('add')
+  .description('Add a new asset')
+  .requiredOption('-n, --name <name>', 'Asset name')
+  .requiredOption('-t, --type <type>', 'Asset type (domain, server, api_key, service, repo, other)')
+  .option('-s, --status <status>', 'Status (default: active)')
+  .option('-o, --owner <owner>', 'Owner')
+  .option('--expires <date>', 'Expiration date (YYYY-MM-DD or ISO)')
+  .option('--meta <json>', 'Metadata JSON string')
+  .action(async (opts) => {
+    const metadata = opts.meta ? JSON.parse(opts.meta) : undefined
+    const created = await createAsset({
+      name: opts.name,
+      type: opts.type as AssetType,
+      status: opts.status as AssetStatus | undefined,
+      owner: opts.owner,
+      expires_at: opts.expires,
+      metadata,
+    })
+    success(`Created asset: ${colorize(created.name, 'cyan')} [${created.type}] (${colorize(created.id, 'dim')})`)
+  })
+
+asset
+  .command('update')
+  .description('Update an existing asset')
+  .requiredOption('--id <uuid>', 'Asset ID')
+  .option('-n, --name <name>', 'New name')
+  .option('-t, --type <type>', 'New type')
+  .option('-s, --status <status>', 'New status')
+  .option('-o, --owner <owner>', 'New owner')
+  .option('--expires <date>', 'New expiration date')
+  .option('--meta <json>', 'New metadata JSON')
+  .action(async (opts) => {
+    const updates: Record<string, unknown> = {}
+    if (opts.name) updates.name = opts.name
+    if (opts.type) updates.type = opts.type
+    if (opts.status) updates.status = opts.status
+    if (opts.owner) updates.owner = opts.owner
+    if (opts.expires) updates.expires_at = opts.expires
+    if (opts.meta) updates.metadata = JSON.parse(opts.meta)
+    const updated = await updateAsset(opts.id, updates)
+    success(`Updated: ${colorize(updated.name, 'cyan')} -> status=${colorize(updated.status, 'bold')}`)
+  })
+
+asset
+  .command('get')
+  .description('Get a single asset by ID')
+  .requiredOption('--id <uuid>', 'Asset ID')
+  .action(async (opts) => {
+    const a = await getAsset(opts.id)
+    console.log(JSON.stringify(a, null, 2))
+  })
+
+asset
+  .command('remove')
+  .description('Delete an asset')
+  .requiredOption('--id <uuid>', 'Asset ID')
+  .action(async (opts) => {
+    await deleteAsset(opts.id)
+    success(`Deleted asset ${colorize(opts.id, 'dim')}`)
+  })
+
+asset
+  .command('track')
+  .description('Log a usage event for an asset')
+  .requiredOption('--id <uuid>', 'Asset ID')
+  .requiredOption('-e, --event <event>', 'Event name (e.g. "renewed", "deployed", "rotated")')
+  .option('--actor <name>', 'Who performed the action')
+  .option('--meta <json>', 'Event metadata JSON')
+  .action(async (opts) => {
+    const metadata = opts.meta ? JSON.parse(opts.meta) : undefined
+    const entry = await trackAssetUsage(opts.id, opts.event, opts.actor, metadata)
+    success(`Tracked: ${colorize(opts.event, 'cyan')} on ${colorize(opts.id, 'dim')} at ${colorize(entry.created_at, 'dim')}`)
+  })
+
+asset
+  .command('usage')
+  .description('View usage log for an asset')
+  .requiredOption('--id <uuid>', 'Asset ID')
+  .option('--limit <n>', 'Max entries', '20')
+  .action(async (opts) => {
+    const events = await listAssetUsage(opts.id, parseInt(opts.limit))
+    if (events.length === 0) {
+      console.log('No usage events found.')
+      return
     }
+    for (const e of events) {
+      console.log(`${e.created_at} | ${(e.actor ?? '-').padEnd(10)} | ${e.event} ${Object.keys(e.metadata).length > 0 ? JSON.stringify(e.metadata) : ''}`)
+    }
+    console.log(`\n${events.length} events`)
   })
 
 program.parseAsync()

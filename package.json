@@ -1,8 +1,24 @@
 {
   "name": "optimal-cli",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Optimal CLI — unified command-line interface for bot orchestration, financial analytics, content management, and infrastructure",
   "type": "module",
+  "bin": {
+    "optimal": "./bin/optimal.ts"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "agents/",
+    "docs/CLI-REFERENCE.md"
+  ],
+  "keywords": ["cli", "supabase", "kanban", "bot-orchestration", "financial-analytics"],
+  "author": "Carlos Lenis <clenis@users.noreply.github.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clenisa/optimal-cli.git"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch bin/optimal.ts",

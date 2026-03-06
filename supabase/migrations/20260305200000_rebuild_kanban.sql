@@ -131,3 +131,12 @@ CREATE POLICY "service_role_all" ON tasks FOR ALL TO service_role USING (true) W
 CREATE POLICY "service_role_all" ON task_labels FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_all" ON comments FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_all" ON activity_log FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+-- Read-only access for anon (dashboard)
+CREATE POLICY "anon_read" ON projects FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_read" ON milestones FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_read" ON labels FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_read" ON tasks FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_read" ON task_labels FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_read" ON comments FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_read" ON activity_log FOR SELECT TO anon USING (true);
