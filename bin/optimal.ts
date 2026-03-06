@@ -2,12 +2,15 @@
 import { Command } from 'commander'
 import 'dotenv/config'
 import {
-  getBoard,
-  createTask,
-  updateTask,
-  logActivity,
-  type CliTask,
-} from '../lib/kanban.js'
+  createProject, getProjectBySlug, listProjects, updateProject,
+  createMilestone, listMilestones,
+  createLabel, listLabels,
+  createTask, updateTask, getTask, listTasks, claimTask, completeTask,
+  addComment, listComments,
+  logActivity, listActivity,
+  formatBoardTable, getNextClaimable,
+  type Task, type TaskStatus,
+} from '../lib/board/index.js'
 import { runAuditComparison } from '../lib/returnpro/audit.js'
 import { exportKpis, formatKpiTable, formatKpiCsv } from '../lib/returnpro/kpis.js'
 import { deploy, healthCheck, listApps } from '../lib/infra/deploy.js'
@@ -55,83 +58,211 @@ const program = new Command()
   .description('Optimal CLI — unified skills for financial analytics, content, and infra')
   .version('0.1.0')
 
-// Board commands
+// --- Board commands ---
 const board = program.command('board').description('Kanban board operations')
 
 board
   .command('view')
   .description('Display the kanban board')
-  .option('-p, --project <slug>', 'Project slug', 'optimal-cli-refactor')
+  .option('-p, --project <slug>', 'Project slug')
   .option('-s, --status <status>', 'Filter by status')
+  .option('--mine <agent>', 'Show only tasks claimed by agent')
   .action(async (opts) => {
-    let tasks = await getBoard(opts.project)
-    if (opts.status) tasks = tasks.filter(t => t.status === opts.status)
-
-    const grouped = new Map<string, CliTask[]>()
-    for (const t of tasks) {
-      const list = grouped.get(t.status) ?? []
-      list.push(t)
-      grouped.set(t.status, list)
+    const filters: { project_id?: string; status?: TaskStatus; claimed_by?: string } = {}
+    if (opts.project) {
+      const proj = await getProjectBySlug(opts.project)
+      filters.project_id = proj.id
     }
-
-    const order = ['in_progress', 'blocked', 'ready', 'backlog', 'review', 'done']
-    console.log('| Status | P | Title | Agent | Skill |')
-    console.log('|--------|---|-------|-------|-------|')
-    for (const status of order) {
-      const list = grouped.get(status) ?? []
-      for (const t of list) {
-        console.log(
-          `| ${t.status} | ${t.priority} | ${t.title} | ${t.assigned_agent ?? '—'} | ${t.skill_ref ?? '—'} |`
-        )
-      }
-    }
-    console.log(`\nTotal: ${tasks.length} tasks`)
+    if (opts.status) filters.status = opts.status as TaskStatus
+    if (opts.mine) filters.claimed_by = opts.mine
+    const tasks = await listTasks(filters)
+    console.log(formatBoardTable(tasks))
   })
 
 board
   .command('create')
   .description('Create a new task')
   .requiredOption('-t, --title <title>', 'Task title')
-  .option('-p, --project <slug>', 'Project slug', 'optimal-cli-refactor')
+  .requiredOption('-p, --project <slug>', 'Project slug')
   .option('-d, --description <desc>', 'Task description')
   .option('--priority <n>', 'Priority 1-4', '3')
   .option('--skill <ref>', 'Skill reference')
+  .option('--source <repo>', 'Source repo')
+  .option('--target <module>', 'Target module')
+  .option('--effort <size>', 'Effort: xs, s, m, l, xl')
+  .option('--blocked-by <ids>', 'Comma-separated blocking task IDs')
   .option('--labels <labels>', 'Comma-separated labels')
   .action(async (opts) => {
+    const project = await getProjectBySlug(opts.project)
     const task = await createTask({
-      project_slug: opts.project,
+      project_id: project.id,
       title: opts.title,
       description: opts.description,
       priority: parseInt(opts.priority) as 1 | 2 | 3 | 4,
-      skill_ref: opts.skill,
-      labels: opts.labels?.split(',').map((l: string) => l.trim()),
+      skill_required: opts.skill,
+      source_repo: opts.source,
+      target_module: opts.target,
+      estimated_effort: opts.effort,
+      blocked_by: opts.blockedBy?.split(',') ?? [],
+      labels: opts.labels?.split(',') ?? [],
     })
-    console.log(`Created task: ${task.id} — "${task.title}" (priority ${task.priority}, status ${task.status})`)
+    console.log(`Created task: ${task.id}\n  ${task.title} [${task.status}] P${task.priority}`)
   })
 
 board
   .command('update')
   .description('Update a task')
-  .requiredOption('--id <taskId>', 'Task UUID')
+  .requiredOption('--id <uuid>', 'Task ID')
   .option('-s, --status <status>', 'New status')
   .option('-a, --agent <name>', 'Assign to agent')
   .option('--priority <n>', 'New priority')
-  .option('-m, --message <msg>', 'Log message')
+  .option('-m, --message <msg>', 'Log message (adds comment)')
   .action(async (opts) => {
     const updates: Record<string, unknown> = {}
     if (opts.status) updates.status = opts.status
-    if (opts.agent) updates.assigned_agent = opts.agent
+    if (opts.agent) updates.assigned_to = opts.agent
     if (opts.priority) updates.priority = parseInt(opts.priority)
+    if (opts.status === 'done') updates.completed_at = new Date().toISOString()
+    const task = await updateTask(opts.id, updates, opts.agent ?? 'cli')
+    if (opts.message) await addComment({ task_id: task.id, author: opts.agent ?? 'cli', body: opts.message })
+    console.log(`Updated: ${task.title} -> ${task.status}`)
+  })
 
-    const task = await updateTask(opts.id, updates)
-    if (opts.message) {
-      await logActivity(opts.id, {
-        agent: opts.agent ?? 'cli',
-        action: 'status_change',
-        message: opts.message,
-      })
+board
+  .command('claim')
+  .description('Claim a task (bot pull model)')
+  .requiredOption('--id <uuid>', 'Task ID')
+  .requiredOption('--agent <name>', 'Agent name')
+  .action(async (opts) => {
+    const task = await claimTask(opts.id, opts.agent)
+    console.log(`Claimed: ${task.title} by ${opts.agent}`)
+  })
+
+board
+  .command('comment')
+  .description('Add a comment to a task')
+  .requiredOption('--id <uuid>', 'Task ID')
+  .requiredOption('--author <name>', 'Author name')
+  .requiredOption('--body <text>', 'Comment body')
+  .action(async (opts) => {
+    const comment = await addComment({ task_id: opts.id, author: opts.author, body: opts.body })
+    console.log(`Comment added by ${comment.author} at ${comment.created_at}`)
+  })
+
+board
+  .command('log')
+  .description('View activity log')
+  .option('--task <uuid>', 'Filter by task ID')
+  .option('--actor <name>', 'Filter by actor')
+  .option('--limit <n>', 'Max entries', '20')
+  .action(async (opts) => {
+    const entries = await listActivity({
+      task_id: opts.task,
+      actor: opts.actor,
+      limit: parseInt(opts.limit),
+    })
+    for (const e of entries) {
+      console.log(`${e.created_at} | ${e.actor.padEnd(8)} | ${e.action.padEnd(15)} | ${JSON.stringify(e.new_value ?? {})}`)
     }
-    console.log(`Updated task ${task.id}: status → ${task.status}, agent → ${task.assigned_agent ?? '—'}`)
+    console.log(`\n${entries.length} entries`)
+  })
+
+// --- Project commands ---
+const proj = program.command('project').description('Project management')
+
+proj
+  .command('list')
+  .description('List all projects')
+  .action(async () => {
+    const projects = await listProjects()
+    console.log('| Status   | P | Slug                    | Owner   | Name |')
+    console.log('|----------|---|-------------------------|---------|------|')
+    for (const p of projects) {
+      console.log(`| ${p.status.padEnd(8)} | ${p.priority} | ${p.slug.padEnd(23)} | ${(p.owner ?? '—').padEnd(7)} | ${p.name} |`)
+    }
+  })
+
+proj
+  .command('create')
+  .description('Create a project')
+  .requiredOption('--slug <slug>', 'Project slug')
+  .requiredOption('--name <name>', 'Project name')
+  .option('--owner <name>', 'Owner')
+  .option('--priority <n>', 'Priority 1-4', '3')
+  .action(async (opts) => {
+    const p = await createProject({
+      slug: opts.slug,
+      name: opts.name,
+      owner: opts.owner,
+      priority: parseInt(opts.priority) as 1 | 2 | 3 | 4,
+    })
+    console.log(`Created project: ${p.slug} (${p.id})`)
+  })
+
+proj
+  .command('update')
+  .description('Update a project')
+  .requiredOption('--slug <slug>', 'Project slug')
+  .option('-s, --status <status>', 'New status')
+  .option('--owner <name>', 'New owner')
+  .action(async (opts) => {
+    const updates: Record<string, unknown> = {}
+    if (opts.status) updates.status = opts.status
+    if (opts.owner) updates.owner = opts.owner
+    const p = await updateProject(opts.slug, updates)
+    console.log(`Updated project: ${p.slug} -> ${p.status}`)
+  })
+
+// --- Milestone commands ---
+const ms = program.command('milestone').description('Milestone management')
+
+ms
+  .command('create')
+  .description('Create a milestone')
+  .requiredOption('--project <slug>', 'Project slug')
+  .requiredOption('--name <name>', 'Milestone name')
+  .option('--due <date>', 'Due date (YYYY-MM-DD)')
+  .action(async (opts) => {
+    const project = await getProjectBySlug(opts.project)
+    const m = await createMilestone({ project_id: project.id, name: opts.name, due_date: opts.due })
+    console.log(`Created milestone: ${m.name} (${m.id})`)
+  })
+
+ms
+  .command('list')
+  .description('List milestones')
+  .option('--project <slug>', 'Filter by project')
+  .action(async (opts) => {
+    let projectId: string | undefined
+    if (opts.project) {
+      const p = await getProjectBySlug(opts.project)
+      projectId = p.id
+    }
+    const milestones = await listMilestones(projectId)
+    for (const m of milestones) {
+      console.log(`${m.status.padEnd(10)} | ${m.due_date ?? 'no date'} | ${m.name}`)
+    }
+  })
+
+// --- Label commands ---
+const lbl = program.command('label').description('Label management')
+
+lbl
+  .command('create')
+  .description('Create a label')
+  .requiredOption('--name <name>', 'Label name')
+  .option('--color <hex>', 'Color hex code')
+  .action(async (opts) => {
+    const l = await createLabel(opts.name, opts.color)
+    console.log(`Created label: ${l.name} (${l.id})`)
+  })
+
+lbl
+  .command('list')
+  .description('List all labels')
+  .action(async () => {
+    const labels = await listLabels()
+    for (const l of labels) console.log(`${l.name}${l.color ? ` (${l.color})` : ''}`)
   })
 
 // Audit financials command
