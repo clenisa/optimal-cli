@@ -1,200 +1,183 @@
 #!/usr/bin/env tsx
 /**
- * Seed the kanban board with the full implementation backlog.
- * Idempotent — checks existing tasks by title before creating.
+ * Seed the board with 5 projects, 6 labels, and 33 migration tasks.
+ * Idempotent — checks existing data before creating.
  *
  * Usage: npx tsx scripts/seed-board.ts
  */
 import 'dotenv/config'
-import { createTask, getBoard } from '../lib/kanban.js'
+import {
+  createProject, listProjects,
+  createLabel, listLabels, getLabelByName,
+  createTask, listTasks,
+  getProjectBySlug,
+  type CreateTaskInput, type Priority, type Effort,
+} from '../lib/board/index.js'
 
-const PROJECT_SLUG = 'optimal-cli-refactor'
+// --- Projects ---
+
+const projectDefs = [
+  { slug: 'website-to-cli', name: 'OptimalOS Website to CLI Migration', priority: 2 as Priority, owner: 'carlos' },
+  { slug: 'satellite-to-cli', name: 'Satellite Repos to CLI Migration', priority: 2 as Priority, owner: 'carlos' },
+  { slug: 'bot-orchestration', name: 'Bot Orchestration Infrastructure', priority: 1 as Priority, owner: 'oracle' },
+  { slug: 'returnpro-mcp-prep', name: 'ReturnPro MCP Materials Prep', priority: 1 as Priority, owner: 'carlos' },
+  { slug: 'cli-polish', name: 'CLI Quality & Testing', priority: 3 as Priority, owner: 'carlos' },
+]
+
+// --- Labels ---
+
+const labelDefs = [
+  { name: 'migration', color: '#3B82F6' },
+  { name: 'new-feature', color: '#10B981' },
+  { name: 'infra', color: '#8B5CF6' },
+  { name: 'high-complexity', color: '#EF4444' },
+  { name: 'bot-task', color: '#F59E0B' },
+  { name: 'career-critical', color: '#EC4899' },
+]
+
+// --- Tasks ---
 
 interface SeedTask {
+  project: string
   title: string
-  skill_ref?: string
-  priority: 1 | 2 | 3 | 4
-  labels: string[]
   description?: string
+  priority: Priority
+  skill_required?: string
+  source_repo?: string
+  target_module?: string
+  estimated_effort: Effort
+  labels: string[]
 }
 
-const tasks: SeedTask[] = [
-  // --- Phase 2 follow-ups (ready — no blockers) ---
-  {
-    title: 'Implement upload-r1 lib function',
-    skill_ref: '/upload-r1',
-    priority: 2,
-    labels: ['returnpro', 'phase-2'],
-    description: 'Extract R1 marketplace data upload from dashboard-returnpro into lib/returnpro/upload-r1.ts',
-  },
-  {
-    title: 'Implement upload-netsuite lib function',
-    skill_ref: '/upload-netsuite',
-    priority: 2,
-    labels: ['returnpro', 'phase-2'],
-    description: 'Extract NetSuite XLSM upload pipeline into lib/returnpro/upload-netsuite.ts',
-  },
-  {
-    title: 'Implement upload-income-statements lib function',
-    skill_ref: '/upload-income-statements',
-    priority: 2,
-    labels: ['returnpro', 'phase-2'],
-    description: 'Extract confirmed income statement CSV upload into lib/returnpro/upload-income-statements.ts',
-  },
-  {
-    title: 'Implement rate-anomalies lib function',
-    skill_ref: '/rate-anomalies',
-    priority: 3,
-    labels: ['returnpro', 'phase-2'],
-    description: 'Extract rate anomaly detection logic from dashboard-returnpro into lib/returnpro/rate-anomalies.ts',
-  },
-  {
-    title: 'Implement diagnose-months lib function',
-    skill_ref: '/diagnose-months',
-    priority: 3,
-    labels: ['returnpro', 'phase-2'],
-    description: 'Extract month-level diagnostic comparison into lib/returnpro/diagnose-months.ts',
-  },
-  {
-    title: 'Implement generate-netsuite-template lib function',
-    skill_ref: '/generate-netsuite-template',
-    priority: 3,
-    labels: ['returnpro', 'phase-2'],
-    description: 'Generate blank NetSuite XLSM templates for data entry into lib/returnpro/generate-netsuite-template.ts',
-  },
+const taskDefs: SeedTask[] = [
+  // === website-to-cli (10 tasks) ===
+  { project: 'website-to-cli', title: 'Migrate auth system from optimalOS to CLI', priority: 2, source_repo: 'optimalos', target_module: 'lib/auth', estimated_effort: 'l', labels: ['migration', 'high-complexity'] },
+  { project: 'website-to-cli', title: 'Migrate kanban board UI to read-only dashboard', priority: 2, source_repo: 'optimalos', target_module: 'apps/optimalos', estimated_effort: 'l', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Port config sync system to CLI skill', priority: 2, source_repo: 'optimalos', target_module: 'lib/config', skill_required: 'config-sync', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Port asset tracking to CLI commands', priority: 2, source_repo: 'optimalos', target_module: 'lib/assets.ts', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Migrate transaction ingestion pipeline', priority: 2, source_repo: 'optimalos', target_module: 'lib/transactions', skill_required: 'ingest-transactions', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Migrate transaction stamping logic', priority: 2, source_repo: 'optimalos', target_module: 'lib/transactions', skill_required: 'stamp-transactions', estimated_effort: 's', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Migrate Wes budget projections to CLI', priority: 2, source_repo: 'optimalos', target_module: 'lib/budget', skill_required: 'project-budget', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Migrate scenario manager to CLI', priority: 3, source_repo: 'optimalos', target_module: 'lib/budget/scenarios.ts', skill_required: 'manage-scenarios', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Port newsletter preview frontend to apps/', priority: 3, source_repo: 'optimalos', target_module: 'apps/newsletter-preview', estimated_effort: 's', labels: ['migration'] },
+  { project: 'website-to-cli', title: 'Port portfolio site to apps/', priority: 4, source_repo: 'portfolio-2026', target_module: 'apps/portfolio-2026', estimated_effort: 's', labels: ['migration'] },
 
-  // --- Content follow-ups (ready) ---
-  {
-    title: 'Implement generate-newsletter-insurance',
-    skill_ref: '/generate-newsletter-insurance',
-    priority: 2,
-    labels: ['content', 'phase-3'],
-    description: 'Insurance-specific newsletter generation (LIFEINSUR brand) with Groq AI content',
-  },
-  {
-    title: 'Implement distribute-newsletter (n8n webhook)',
-    skill_ref: '/distribute-newsletter',
-    priority: 2,
-    labels: ['content', 'phase-3'],
-    description: 'Trigger n8n webhook to distribute published newsletter via GoHighLevel email',
-  },
-  {
-    title: 'Implement generate-social-posts pipeline',
-    skill_ref: '/generate-social-posts',
-    priority: 2,
-    labels: ['content', 'phase-3'],
-    description: 'Full pipeline: scrape competitors, analyze patterns, generate 9 social posts, push to Strapi',
-  },
-  {
-    title: 'Implement publish-social-posts',
-    skill_ref: '/publish-social-posts',
-    priority: 3,
-    labels: ['content', 'phase-3'],
-    description: 'Publish scheduled social posts to Meta (IG/FB) via Marketing API',
-  },
-  {
-    title: 'Implement publish-blog',
-    skill_ref: '/publish-blog',
-    priority: 3,
-    labels: ['content', 'phase-3'],
-    description: 'Publish blog post to Strapi CMS and deploy preview site via Vercel',
-  },
+  // === satellite-to-cli (8 tasks) ===
+  { project: 'satellite-to-cli', title: 'Migrate dashboard-returnpro to apps/ as read-only', priority: 2, source_repo: 'dashboard-returnpro', target_module: 'apps/dashboard-returnpro', estimated_effort: 'l', labels: ['migration', 'career-critical'] },
+  { project: 'satellite-to-cli', title: 'Port Wes dashboard to apps/', priority: 2, source_repo: 'wes-dashboard', target_module: 'apps/wes-dashboard', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'satellite-to-cli', title: 'Port scrape-ads social scraper to CLI', priority: 3, source_repo: 'scrape-ads', target_module: 'lib/social/scraper.ts', skill_required: 'scrape-ads', estimated_effort: 's', labels: ['migration'] },
+  { project: 'satellite-to-cli', title: 'Port social post generator to CLI', priority: 2, source_repo: 'social-generator', target_module: 'lib/social/post-generator.ts', skill_required: 'generate-social-posts', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'satellite-to-cli', title: 'Port social post publisher to CLI', priority: 3, source_repo: 'social-publisher', target_module: 'lib/social/publish.ts', skill_required: 'publish-social-posts', estimated_effort: 'm', labels: ['migration'] },
+  { project: 'satellite-to-cli', title: 'Port blog publisher to CLI', priority: 3, source_repo: 'cms-publisher', target_module: 'lib/cms/publish-blog.ts', skill_required: 'publish-blog', estimated_effort: 's', labels: ['migration'] },
+  { project: 'satellite-to-cli', title: 'Port newsletter distributor to CLI', priority: 2, source_repo: 'newsletter-dist', target_module: 'lib/newsletter/distribute.ts', skill_required: 'distribute-newsletter', estimated_effort: 's', labels: ['migration'] },
+  { project: 'satellite-to-cli', title: 'Port insurance newsletter generator to CLI', priority: 2, source_repo: 'newsletter-insurance', target_module: 'lib/newsletter/generate.ts', skill_required: 'generate-newsletter-insurance', estimated_effort: 'm', labels: ['migration'] },
 
-  // --- Infrastructure follow-ups (ready) ---
-  {
-    title: 'Implement migrate-db skill',
-    skill_ref: '/migrate-db',
-    priority: 3,
-    labels: ['infra', 'phase-3'],
-    description: 'Run Supabase migrations via CLI (supabase db push --linked) with pre-flight checks',
-  },
-  {
-    title: 'Implement manage-scenarios for budget',
-    skill_ref: '/manage-scenarios',
-    priority: 3,
-    labels: ['budget', 'phase-3'],
-    description: 'CRUD for budget projection scenarios (save/load/compare named adjustment sets)',
-  },
-  {
-    title: 'Implement delete-batch for transactions',
-    skill_ref: '/delete-batch',
-    priority: 3,
-    labels: ['transactions', 'phase-3'],
-    description: 'Bulk delete transactions by date range or import batch ID with confirmation safeguard',
-  },
+  // === bot-orchestration (6 tasks) ===
+  { project: 'bot-orchestration', title: 'Build bot heartbeat cron system', priority: 1, target_module: 'lib/bots/heartbeat.ts', estimated_effort: 'l', labels: ['new-feature', 'infra', 'high-complexity'] },
+  { project: 'bot-orchestration', title: 'Implement bot skill-matching engine', priority: 1, target_module: 'lib/bots/matcher.ts', estimated_effort: 'l', labels: ['new-feature', 'high-complexity'] },
+  { project: 'bot-orchestration', title: 'Build agent task claim workflow', priority: 1, target_module: 'lib/board/index.ts', estimated_effort: 'm', labels: ['new-feature', 'bot-task'] },
+  { project: 'bot-orchestration', title: 'Create bot progress reporter', priority: 2, target_module: 'lib/bots/reporter.ts', estimated_effort: 'm', labels: ['new-feature', 'bot-task'] },
+  { project: 'bot-orchestration', title: 'Build multi-agent coordination protocol', priority: 2, target_module: 'lib/bots/coordinator.ts', estimated_effort: 'xl', labels: ['new-feature', 'high-complexity'] },
+  { project: 'bot-orchestration', title: 'Implement agent activity dashboard', priority: 3, target_module: 'apps/agent-dashboard', estimated_effort: 'l', labels: ['new-feature', 'bot-task'] },
 
-  // --- Frontend migration (backlog — future phase) ---
-  {
-    title: 'Migrate dashboard-returnpro to apps/ as read-only',
-    priority: 4,
-    labels: ['frontend', 'phase-4'],
-    description: 'Move dashboard-returnpro Next.js app into apps/dashboard-returnpro as a read-only frontend consuming CLI skills',
-  },
-  {
-    title: 'Migrate optimalos to apps/ as read-only',
-    priority: 4,
-    labels: ['frontend', 'phase-4'],
-    description: 'Move optimalos Next.js app into apps/optimalos as a read-only frontend consuming CLI skills',
-  },
-  {
-    title: 'Migrate portfolio-2026 to apps/ as read-only',
-    priority: 4,
-    labels: ['frontend', 'phase-4'],
-    description: 'Move portfolio-2026 Next.js app into apps/portfolio-2026 as a read-only frontend consuming CLI skills',
-  },
-  {
-    title: 'Migrate wes-dashboard to apps/ as read-only',
-    priority: 4,
-    labels: ['frontend', 'phase-4'],
-    description: 'Move wes-dashboard Next.js app into apps/wes-dashboard as a read-only frontend consuming CLI skills',
-  },
-  {
-    title: 'Migrate newsletter-preview to apps/ as read-only',
-    priority: 4,
-    labels: ['frontend', 'phase-4'],
-    description: 'Move newsletter-preview Next.js app into apps/newsletter-preview as a read-only frontend consuming CLI skills',
-  },
+  // === returnpro-mcp-prep (5 tasks) ===
+  { project: 'returnpro-mcp-prep', title: 'Document ReturnPro API surface for MCP', priority: 1, target_module: 'docs/mcp', estimated_effort: 'm', labels: ['career-critical'] },
+  { project: 'returnpro-mcp-prep', title: 'Build ReturnPro data validation suite', priority: 1, source_repo: 'dashboard-returnpro', target_module: 'lib/returnpro', estimated_effort: 'l', labels: ['career-critical', 'high-complexity'] },
+  { project: 'returnpro-mcp-prep', title: 'Create ReturnPro demo dataset', priority: 2, target_module: 'scripts/seed-returnpro-demo.ts', estimated_effort: 'm', labels: ['career-critical'] },
+  { project: 'returnpro-mcp-prep', title: 'Build ReturnPro audit trail export', priority: 2, source_repo: 'dashboard-returnpro', target_module: 'lib/returnpro/audit.ts', skill_required: 'audit-financials', estimated_effort: 'm', labels: ['career-critical'] },
+  { project: 'returnpro-mcp-prep', title: 'Write ReturnPro MCP integration spec', priority: 1, target_module: 'docs/mcp/returnpro-spec.md', estimated_effort: 'l', labels: ['career-critical', 'high-complexity'] },
+
+  // === cli-polish (4 tasks) ===
+  { project: 'cli-polish', title: 'Add comprehensive CLI help text and examples', priority: 3, target_module: 'bin/optimal.ts', estimated_effort: 's', labels: ['infra'] },
+  { project: 'cli-polish', title: 'Add CLI output formatting (color, tables)', priority: 3, target_module: 'lib/format.ts', estimated_effort: 'm', labels: ['new-feature'] },
+  { project: 'cli-polish', title: 'Write end-to-end CLI test suite', priority: 2, target_module: 'tests/', estimated_effort: 'l', labels: ['infra'] },
+  { project: 'cli-polish', title: 'Add error handling and user-friendly messages', priority: 2, target_module: 'bin/optimal.ts', estimated_effort: 'm', labels: ['infra'] },
 ]
 
 async function main() {
-  console.log(`Seeding kanban board for project: ${PROJECT_SLUG}`)
-  console.log(`Tasks to seed: ${tasks.length}\n`)
+  console.log('Seeding board...\n')
 
-  // Fetch existing tasks for idempotency check
-  const existing = await getBoard(PROJECT_SLUG)
-  const existingTitles = new Set(existing.map(t => t.title))
+  // --- Create projects ---
+  const existingProjects = await listProjects()
+  const existingSlugs = new Set(existingProjects.map(p => p.slug))
+  const projectMap = new Map<string, string>() // slug -> id
 
-  console.log(`Existing tasks on board: ${existing.length}`)
+  for (const p of existingProjects) {
+    projectMap.set(p.slug, p.id)
+  }
 
+  for (const def of projectDefs) {
+    if (existingSlugs.has(def.slug)) {
+      console.log(`  SKIP project: ${def.slug} (exists)`)
+      continue
+    }
+    const proj = await createProject(def)
+    projectMap.set(proj.slug, proj.id)
+    console.log(`  CREATE project: ${proj.slug} (${proj.id})`)
+  }
+
+  // Ensure all project IDs are in the map
+  for (const def of projectDefs) {
+    if (!projectMap.has(def.slug)) {
+      const proj = await getProjectBySlug(def.slug)
+      projectMap.set(proj.slug, proj.id)
+    }
+  }
+
+  // --- Create labels ---
+  const existingLabels = await listLabels()
+  const existingLabelNames = new Set(existingLabels.map(l => l.name))
+
+  for (const def of labelDefs) {
+    if (existingLabelNames.has(def.name)) {
+      console.log(`  SKIP label: ${def.name} (exists)`)
+      continue
+    }
+    const label = await createLabel(def.name, def.color)
+    console.log(`  CREATE label: ${label.name} (${label.id})`)
+  }
+
+  // --- Create tasks ---
   let created = 0
   let skipped = 0
 
-  for (const task of tasks) {
-    if (existingTitles.has(task.title)) {
-      console.log(`  SKIP: "${task.title}" (already exists)`)
+  for (const def of taskDefs) {
+    const projectId = projectMap.get(def.project)
+    if (!projectId) {
+      console.error(`  ERROR: project ${def.project} not found`)
+      continue
+    }
+
+    // Idempotency: check by title within project
+    const existing = await listTasks({ project_id: projectId })
+    if (existing.some(t => t.title === def.title)) {
+      console.log(`  SKIP task: "${def.title}" (exists)`)
       skipped++
       continue
     }
 
     try {
-      const result = await createTask({
-        project_slug: PROJECT_SLUG,
-        title: task.title,
-        description: task.description,
-        priority: task.priority,
-        skill_ref: task.skill_ref,
-        labels: task.labels,
+      const task = await createTask({
+        project_id: projectId,
+        title: def.title,
+        description: def.description,
+        priority: def.priority,
+        skill_required: def.skill_required,
+        source_repo: def.source_repo,
+        target_module: def.target_module,
+        estimated_effort: def.estimated_effort,
+        labels: def.labels,
       })
-      console.log(`  CREATE: "${result.title}" [P${result.priority}] (${result.id})`)
+      console.log(`  CREATE task: "${task.title}" [P${task.priority}] (${task.id})`)
       created++
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`  ERROR: "${task.title}" — ${msg}`)
+      console.error(`  ERROR: "${def.title}" — ${msg}`)
     }
   }
 
-  console.log(`\nDone. Created: ${created}, Skipped: ${skipped}`)
-  console.log(`Total tasks on board: ${existing.length + created}`)
+  console.log(`\nDone. Projects: ${projectDefs.length}, Labels: ${labelDefs.length}`)
+  console.log(`Tasks created: ${created}, skipped: ${skipped}, total defined: ${taskDefs.length}`)
 }
 
 main().catch((err) => {
