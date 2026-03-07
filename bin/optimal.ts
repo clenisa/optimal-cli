@@ -231,6 +231,81 @@ board
     console.log(`\n${entries.length} entries`)
   })
 
+// --- Kanban Sync Commands ---
+import { fetchSupabaseTasks, fetchObsidianTasks, diffKanban, syncObsidianToSupabase, printKanban, supabase as kanbanSupabase } from '../lib/kanban/sync.js'
+
+board
+  .command('sync:status')
+  .description('Show diff between supabase and obsidian tasks')
+  .action(async () => {
+    const { supabase, obsidian, onlySupabase, onlyObsidian } = await diffKanban()
+    console.log(`\n📊 Kanban Diff Report`)
+    console.log(`Supabase tasks: ${supabase.length}`)
+    console.log(`Obsidian tasks: ${obsidian.length}`)
+    console.log(`\nOnly in Supabase (${onlySupabase.length}):`)
+    for (const t of onlySupabase.slice(0, 10)) console.log(`  - ${t}`)
+    if (onlySupabase.length > 10) console.log(`  ... and ${onlySupabase.length - 10} more`)
+    console.log(`\nOnly in Obsidian (${onlyObsidian.length}):`)
+    for (const t of onlyObsidian.slice(0, 10)) console.log(`  - ${t}`)
+    if (onlyObsidian.length > 10) console.log(`  ... and ${onlyObsidian.length - 10} more`)
+  })
+
+board
+  .command('sync:push')
+  .description('Push obsidian tasks to supabase')
+  .option('--dry-run', 'Show what would be synced without making changes', false)
+  .option('--force', 'Force overwrite existing tasks', false)
+  .action(async (opts) => {
+    console.log(`Syncing from Obsidian → Supabase...`)
+    const result = await syncObsidianToSupabase(opts.dryRun)
+    if (opts.dryRun) {
+      console.log(`[dry-run] Would create: ${result.created}, update: ${result.updated}`)
+    } else {
+      console.log(`✅ Created: ${result.created}, Updated: ${result.updated}`)
+    }
+    if (result.errors.length) {
+      console.log(`❌ Errors: ${result.errors.length}`)
+      for (const e of result.errors.slice(0, 5)) console.log(`  - ${e}`)
+    }
+  })
+
+board
+  .command('sync:pull')
+  .description('Pull supabase tasks to obsidian markdown')
+  .option('--dry-run', 'Show what would be pulled without writing', false)
+  .option('--project <slug>', 'Filter by project slug')
+  .action(async (opts) => {
+    console.log(`Syncing from Supabase → Obsidian...`)
+    const tasks = await fetchSupabaseTasks()
+    console.log(`Found ${tasks.length} tasks in supabase`)
+    // TODO: Implement pull to obsidian markdown
+    console.log(`[not implemented yet] Pull to obsidian`)
+  })
+
+board
+  .command('refresh')
+  .description('Show current kanban board from supabase (real-time)')
+  .option('--watch', 'Watch for changes', false)
+  .option('--interval <sec>', 'Watch interval', '30')
+  .action(async (opts) => {
+    if (opts.watch) {
+      console.log(`Watching (Ctrl+C to stop)...`)
+      let lastCount = 0
+      while (true) {
+        const tasks = await fetchSupabaseTasks()
+        if (tasks.length !== lastCount) {
+          console.clear()
+          console.log(`Updated: ${new Date().toISOString()}`)
+          await printKanban()
+          lastCount = tasks.length
+        }
+        await new Promise(r => setTimeout(r, parseInt(opts.interval) * 1000))
+      }
+    } else {
+      await printKanban()
+    }
+  })
+
 // --- Project commands ---
 const proj = program.command('project').description('Project management')
   .addHelpText('after', `
