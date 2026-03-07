@@ -108,6 +108,8 @@ board
   .option('-p, --project <slug>', 'Project slug')
   .option('-s, --status <status>', 'Filter by status')
   .option('--mine <agent>', 'Show only tasks claimed by agent')
+  .option('-w, --watch', 'Watch for changes (refresh every 30s)', false)
+  .option('--interval <seconds>', 'Watch refresh interval in seconds', '30')
   .action(async (opts) => {
     const filters: { project_id?: string; status?: TaskStatus; claimed_by?: string } = {}
     if (opts.project) {
@@ -116,8 +118,25 @@ board
     }
     if (opts.status) filters.status = opts.status as TaskStatus
     if (opts.mine) filters.claimed_by = opts.mine
-    const tasks = await listTasks(filters)
-    console.log(formatBoardTable(tasks))
+    
+    if (opts.watch) {
+      const interval = parseInt(opts.interval) * 1000
+      console.log(`Watching board (refresh every ${opts.interval}s, Ctrl+C to stop)...`)
+      let lastCount = 0
+      while (true) {
+        const tasks = await listTasks(filters)
+        if (tasks.length !== lastCount) {
+          console.clear()
+          console.log(`Updated: ${new Date().toISOString()}`)
+          console.log(formatBoardTable(tasks))
+          lastCount = tasks.length
+        }
+        await new Promise(r => setTimeout(r, interval))
+      }
+    } else {
+      const tasks = await listTasks(filters)
+      console.log(formatBoardTable(tasks))
+    }
   })
 
 board
