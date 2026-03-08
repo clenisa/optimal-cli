@@ -54,7 +54,7 @@ let _supabase: SupabaseClient | null = null
 
 function getKanbanClient(): SupabaseClient {
   if (!_supabase) {
-    const supabase = getSupabase()
+    const supabase = getSupabase('optimal')
     if (!supabase) {
       throw new Error('Supabase not configured. Set OPTIMAL_SUPABASE_URL and OPTIMAL_SUPABASE_ANON_KEY')
     }

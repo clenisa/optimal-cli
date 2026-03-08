@@ -11,9 +11,8 @@ const SUPABASE_KEY = process.env.OPTIMAL_SUPABASE_SERVICE_KEY || process.env.SUP
 
 const TASKS_DIR = process.env.OPTIMAL_TASKS_DIR || join(process.env.HOME || '', 'Documents/optimal/tasks')
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  db: { schema: 'public' }
-})
+const _supabase = SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY, { db: { schema: 'public' } }) : null
+export const supabase = () => _supabase
 
 export interface SupabaseTask {
   id: string
@@ -59,7 +58,9 @@ export interface ObsidianTask {
  * Fetch all tasks from supabase
  */
 export async function fetchSupabaseTasks(projectId?: string): Promise<SupabaseTask[]> {
-  let query = supabase.from('tasks').select('*').order('created_at', { ascending: false })
+  const sb = supabase()
+  if (!sb) throw new Error('Supabase not configured. Set OPTIMAL_SUPABASE_URL and OPTIMAL_SUPABASE_SERVICE_KEY')
+  let query = sb.from('tasks').select('*').order('created_at', { ascending: false })
   if (projectId) {
     query = query.eq('project_id', projectId)
   }
@@ -72,7 +73,9 @@ export async function fetchSupabaseTasks(projectId?: string): Promise<SupabaseTa
  * Fetch all projects from supabase
  */
 export async function fetchSupabaseProjects() {
-  const { data, error } = await supabase.from('projects').select('*').order('name')
+  const sb = supabase()
+  if (!sb) throw new Error('Supabase not configured. Set OPTIMAL_SUPABASE_URL and OPTIMAL_SUPABASE_SERVICE_KEY')
+  const { data, error } = await sb.from('projects').select('*').order('name')
   if (error) throw new Error(`Failed to fetch projects: ${error.message}`)
   return data || []
 }
@@ -202,7 +205,7 @@ export async function syncObsidianToSupabase(dryRun = true): Promise<{ created: 
       project_id: defaultProject.id,
       title: task.title,
       description: task.description,
-      status: statusMap[t.status] || 'backlog',
+      status: statusMap[task.status] || 'backlog',
       priority: task.priority,
       assigned_to: task.assignee || null,
       blocked_by: [],
@@ -216,18 +219,23 @@ export async function syncObsidianToSupabase(dryRun = true): Promise<{ created: 
         console.log(`[dry-run] Would create: ${task.title}`)
       }
     } else {
-      try {
-        if (existing) {
-          const { error } = await supabase.from('tasks').update(supabaseTask).eq('id', existing.id)
-          if (error) throw error
-          updated++
-        } else {
-          const { error } = await supabase.from('tasks').insert(supabaseTask)
-          if (error) throw error
-          created++
+      const sb = supabase()
+      if (!sb) {
+        errors.push(`${task.title}: Supabase not configured`)
+      } else {
+        try {
+          if (existing) {
+            const { error } = await sb.from('tasks').update(supabaseTask).eq('id', existing.id)
+            if (error) throw error
+            updated++
+          } else {
+            const { error } = await sb.from('tasks').insert(supabaseTask)
+            if (error) throw error
+            created++
+          }
+        } catch (e: any) {
+          errors.push(`${task.title}: ${e.message}`)
         }
-      } catch (e: any) {
-        errors.push(`${task.title}: ${e.message}`)
       }
     }
   }

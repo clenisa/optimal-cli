@@ -2,17 +2,17 @@
 
 Unified command-line interface for agent config sync, financial analytics, content management, and infrastructure.
 
-[![npm version](https://img.shields.io/npm/v/@clenisa/optimal-cli.svg)](https://www.npmjs.com/package/@clenisa/optimal-cli)
+[![npm version](https://img.shields.io/npm/v/optimal-cli.svg)](https://www.npmjs.com/package/optimal-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Installation
 
 ```bash
 # Install globally
-npm install -g @clenisa/optimal-cli
+npm install -g optimal-cli
 
 # Or use with npx (no install)
-npx @clenisa/optimal-cli <command>
+npx optimal-cli <command>
 ```
 
 ## Quick Start

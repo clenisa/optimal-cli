@@ -70,10 +70,35 @@ import {
   type AssetType, type AssetStatus,
 } from '../lib/assets/index.js'
 
+// Dynamic version from package.json (works in published package)
+let CLI_VERSION = '0.0.0'
+try {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const { dirname, join } = await import('node:path')
+  const __filename = fileURLToPath(import.meta.url)
+  const __dirname = dirname(__filename)
+  // Try multiple paths for compatibility
+  const paths = [
+    join(__dirname, '../../package.json'),
+    join(__dirname, '../package.json'),
+    join(__dirname, 'package.json'),
+  ]
+  for (const pkgPath of paths) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
+      if (pkg.version) {
+        CLI_VERSION = pkg.version
+        break
+      }
+    } catch { /* ignore and try next path */ }
+  }
+} catch { /* fallback to default */ }
+
 const program = new Command()
   .name('optimal')
   .description('Optimal CLI — unified skills for financial analytics, content, and infra')
-  .version('0.1.0')
+  .version(CLI_VERSION)
   .addHelpText('after', `
 Examples:
   $ optimal board view                              View the kanban board
@@ -544,6 +569,72 @@ program
       console.error(`Health check failed: ${msg}`)
       process.exit(1)
     }
+  })
+
+// Doctor command - diagnose CLI issues
+program
+  .command('doctor')
+  .description('Diagnose common CLI issues and suggest fixes')
+  .action(async () => {
+    console.log('🔍 Optimal CLI Doctor\n')
+    
+    // Check npm package
+    console.log('--- Package Status ---')
+    try {
+      const { execSync } = await import('child_process')
+      const version = execSync('optimal --version', { encoding: 'utf-8' }).trim()
+      console.log(`✓ optimal-cli: installed (${version})`)
+    } catch {
+      console.log(`✗ optimal-cli: not installed or not in PATH`)
+      console.log(`  → Run: npm install -g optimal-cli`)
+    }
+    
+    // Check node version
+    console.log('\n--- Node.js ---')
+    console.log(`✓ Node.js: ${process.version}`)
+    
+    // Check env vars
+    console.log('\n--- Environment Variables ---')
+    const required = ['OPTIMAL_SUPABASE_URL', 'OPTIMAL_SUPABASE_SERVICE_KEY']
+    const optional = ['RETURNPRO_SUPABASE_URL', 'RETURNPRO_SERVICE_KEY', 'STRAPI_URL', 'STRAPI_API_TOKEN']
+    
+    for (const key of required) {
+      if (process.env[key]) {
+        console.log(`✓ ${key}: set`)
+      } else {
+        console.log(`✗ ${key}: not set`)
+        console.log(`  → Required for config sync & kanban`)
+      }
+    }
+    for (const key of optional) {
+      if (process.env[key]) {
+        console.log(`✓ ${key}: set`)
+      } else {
+        console.log(`○ ${key}: not set (optional)`)
+      }
+    }
+    
+    // Check config file
+    console.log('\n--- Config File ---')
+    try {
+      const { readLocalConfig, getLocalConfigPath } = await import('../lib/config/registry.js')
+      const cfg = await readLocalConfig()
+      if (cfg) {
+        console.log(`✓ Config: found at ${getLocalConfigPath()}`)
+        console.log(`  profile: ${cfg.profile.name}`)
+        console.log(`  owner: ${cfg.profile.owner}`)
+      } else {
+        console.log(`○ Config: not found at ${getLocalConfigPath()}`)
+        console.log(`  → Run: optimal config init`)
+      }
+    } catch (e) {
+      console.log(`✗ Config: error reading - ${e instanceof Error ? e.message : String(e)}`)
+    }
+    
+    console.log('\n--- Quick Fixes ---')
+    console.log('1. Install: npm install -g optimal-cli')
+    console.log('2. Config: optimal config init')
+    console.log('3. Env: source ~/.optimal/.env')
   })
 
 // Budget projection commands
