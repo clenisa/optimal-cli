@@ -182,6 +182,63 @@ optimal board update --id abc-123 --status done --agent oracle
 
 ---
 
+### `optimal board sync:push`
+Push obsidian tasks to supabase.
+
+```bash
+optimal board sync:push [options]
+```
+
+**Options:**
+- `--dry-run` — Show what would be synced without writing (default: true)
+
+**Example:**
+```bash
+optimal board sync:push
+# [dry-run] Would create: Fix bug
+# [dry-run] Would update: Add tests
+```
+
+---
+
+### `optimal board sync:pull`
+Pull supabase tasks to obsidian markdown.
+
+```bash
+optimal board sync:pull [options]
+```
+
+**Options:**
+- `--dry-run` — Show what would be pulled without writing (default: false)
+- `--project <slug>` — Filter by project slug
+
+**Example:**
+```bash
+optimal board sync:pull --dry-run
+# Syncing from Supabase → Obsidian...
+# [dry-run] Would create: task__fix-bug__a1b2c3d4.md
+```
+
+---
+
+### `optimal board sync:status`
+Show diff between supabase and obsidian tasks.
+
+```bash
+optimal board sync:status
+```
+
+**Example:**
+```bash
+optimal board sync:status
+# Supabase tasks: 12
+# Obsidian tasks: 15
+# Only in Supabase: ["Fix bug"]
+# Only in Obsidian: ["Add tests", "Update docs"]
+```
+
+---
+
 ## Database Migration Commands
 
 ### `optimal migrate push`

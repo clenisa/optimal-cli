@@ -37,6 +37,13 @@ supabase/ — consolidated migrations
 - Package manager: pnpm (never npm or yarn)
 - Git email: 95986651+clenisa@users.noreply.github.com
 
+## 3-Way Sync (Supabase ↔ Obsidian ↔ CLI)
+- `optimal board sync:pull` — Pull supabase tasks to obsidian markdown files
+- `optimal board sync:push` — Push obsidian markdown tasks to supabase
+- `optimal board sync:status` — Show diff between supabase and obsidian
+- `optimal board refresh` — Real-time board monitoring with --watch mode
+- Sync functions in lib/kanban/sync.ts
+
 ## Supabase Tables (Board — OptimalOS Instance)
 | Table | Purpose |
 |-------|---------|
