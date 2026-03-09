@@ -76,6 +76,12 @@ optimal board comment --id <uuid> --author bot1 --body "Working on it"
 # View activity log
 optimal board log
 optimal board log --actor bot1 --limit 10
+
+# 3-way sync with Obsidian
+optimal board sync:status                    # Diff supabase vs obsidian
+optimal board sync:pull --dry-run            # Pull supabase tasks to obsidian
+optimal board sync:pull --project my-project # Filter by project
+optimal board sync:push --dry-run            # Push obsidian tasks to supabase
 ```
 
 **Statuses:** `backlog` > `ready` > `claimed` > `in_progress` > `review` > `done` | `blocked`

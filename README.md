@@ -80,6 +80,9 @@ Manage tasks across agents.
 | `optimal board view` | Display kanban board |
 | `optimal board create --title "Task name"` | Create new task |
 | `optimal board update --id <uuid> --status done` | Update task status |
+| `optimal board sync:pull` | Pull supabase tasks to obsidian |
+| `optimal board sync:push` | Push obsidian tasks to supabase |
+| `optimal board sync:status` | Diff supabase vs obsidian |
 
 ### Financial Analytics (ReturnPro)
 
