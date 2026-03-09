@@ -29,7 +29,7 @@ export interface MigrateResult {
 /** Hardcoded project directories — these live on Carlos's machine. */
 const PROJECT_DIRS: Record<'returnpro' | 'optimalos', string> = {
   returnpro: '/home/optimal/dashboard-returnpro',
-  optimalos: '/home/optimal/optimalos',
+  optimalos: '/home/oracle/.openclaw/workspace/optimal-cli',
 }
 
 // ---------------------------------------------------------------------------
