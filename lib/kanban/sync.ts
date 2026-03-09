@@ -273,3 +273,112 @@ export async function printKanban() {
     console.log('')
   }
 }
+
+/**
+ * Convert supabase task to obsidian markdown file
+ */
+function supabaseTaskToObsidianMarkdown(task: SupabaseTask): string {
+  // Map supabase status to obsidian status
+  const statusMap: Record<string, string> = {
+    'backlog': 'pending',
+    'ready': 'pending',
+    'in_progress': 'in_progress',
+    'done': 'done',
+    'cancelled': 'cancelled'
+  }
+  
+  const obsidianStatus = statusMap[task.status] || 'pending'
+  const completedAt = task.completed_at ? task.completed_at.split('T')[0] : ''
+  const createdAt = task.created_at.split('T')[0]
+  
+  // Build tags from skill_required and source_repo if present
+  const tags: string[] = []
+  if (task.skill_required) tags.push(task.skill_required)
+  if (task.source_repo) tags.push(task.source_repo)
+  
+  const tagsStr = tags.length > 0 ? `\ntags: [${tags.join(', ')}]` : ''
+  
+  // Build frontmatter
+  const frontmatter = `---
+id: ${task.id}
+title: "${task.title.replace(/"/g, '\\"')}"
+status: ${obsidianStatus}
+priority: ${task.priority}
+assignee: ${task.assigned_to || ''}
+source: ${task.source_repo || 'supabase'}
+completed_at: ${completedAt}
+completed_by: ${task.completed_at ? 'oracle' : ''}
+created_at: ${createdAt}${tagsStr}
+---
+
+## description
+${task.description || 'No description'}
+
+${task.blocked_by && task.blocked_by.length > 0 ? `## blocked by\n${task.blocked_by.map(b => `- ${b}`).join('\n')}` : ''}
+
+${task.skill_required ? `## skill required\n${task.skill_required}` : ''}
+`
+  
+  return frontmatter
+}
+
+/**
+ * Sync supabase tasks TO obsidian markdown files
+ */
+export async function syncSupabaseToObsidian(dryRun = true, projectSlug?: string): Promise<{ created: number, updated: number, skipped: number, errors: string[] }> {
+  const errors: string[] = []
+  let created = 0, updated = 0, skipped = 0
+  
+  // Get project id if project slug provided
+  let projectId: string | undefined
+  if (projectSlug) {
+    const projects = await fetchSupabaseProjects()
+    const project = projects.find(p => p.slug === projectSlug)
+    if (project) {
+      projectId = project.id
+    } else {
+      throw new Error(`Project not found: ${projectSlug}`)
+    }
+  }
+  
+  // Fetch supabase tasks
+  const supabaseTasks = await fetchSupabaseTasks(projectId)
+  
+  // Get existing obsidian tasks to compare
+  const obsidianTasks = await fetchObsidianTasks()
+  const existingByTitle = new Map(obsidianTasks.map(t => [t.title, t]))
+  
+  // Ensure tasks directory exists
+  if (!existsSync(TASKS_DIR)) {
+    await mkdir(TASKS_DIR, { recursive: true })
+  }
+  
+  for (const task of supabaseTasks) {
+    const existing = existingByTitle.get(task.title)
+    const filename = `task__${task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}__${task.id.slice(0, 8)}.md`
+    
+    if (dryRun) {
+      if (existing) {
+        console.log(`[dry-run] Would update: ${task.title}`)
+        updated++
+      } else {
+        console.log(`[dry-run] Would create: ${filename}`)
+        created++
+      }
+    } else {
+      try {
+        const markdown = supabaseTaskToObsidianMarkdown(task)
+        await writeFile(join(TASKS_DIR, filename), markdown, 'utf-8')
+        if (existing) {
+          updated++
+        } else {
+          created++
+        }
+      } catch (e: any) {
+        errors.push(`${task.title}: ${e.message}`)
+      }
+    }
+  }
+  
+  return { created, updated, skipped, errors }
+}

@@ -257,7 +257,7 @@ board
   })
 
 // --- Kanban Sync Commands ---
-import { fetchSupabaseTasks, fetchObsidianTasks, diffKanban, syncObsidianToSupabase, printKanban, supabase as kanbanSupabase } from '../lib/kanban/sync.js'
+import { fetchSupabaseTasks, fetchObsidianTasks, diffKanban, syncObsidianToSupabase, syncSupabaseToObsidian, printKanban, supabase as kanbanSupabase } from '../lib/kanban/sync.js'
 
 board
   .command('sync:status')
@@ -300,11 +300,19 @@ board
   .option('--dry-run', 'Show what would be pulled without writing', false)
   .option('--project <slug>', 'Filter by project slug')
   .action(async (opts) => {
-    console.log(`Syncing from Supabase → Obsidian...`)
-    const tasks = await fetchSupabaseTasks()
-    console.log(`Found ${tasks.length} tasks in supabase`)
-    // TODO: Implement pull to obsidian markdown
-    console.log(`[not implemented yet] Pull to obsidian`)
+    console.log(`Syncing from Supabase → Obsidian...\n`)
+    const result = await syncSupabaseToObsidian(opts.dryRun, opts.project)
+    if (opts.dryRun) {
+      console.log(`\n[Dry run] Would create: ${result.created}, update: ${result.updated}`)
+    } else {
+      console.log(`\n✓ Created: ${result.created}, Updated: ${result.updated}`)
+    }
+    if (result.errors.length > 0) {
+      console.log(`\n⚠ Errors:`)
+      for (const err of result.errors) {
+        console.log(`  - ${err}`)
+      }
+    }
   })
 
 board
