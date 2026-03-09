@@ -120,7 +120,7 @@ RETURNPRO_SUPABASE_URL=https://vvutttwunexshxkmygik.supabase.co
 RETURNPRO_SUPABASE_SERVICE_KEY=...
 
 # Strapi CMS
-STRAPI_URL=https://strapi.op-hub.com
+STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=...
 
 # Content Generation
@@ -135,7 +135,7 @@ META_IG_ACCOUNT_ID_CRE_11TRUST=... # ElevenTrust IG account
 META_IG_ACCOUNT_ID_LIFEINSUR=...   # AnchorPoint IG account
 
 # Distribution
-N8N_WEBHOOK_URL=https://n8n.op-hub.com
+N8N_WEBHOOK_URL=https://n8n.optimal.miami
 ```
 
 ## Architecture

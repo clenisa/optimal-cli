@@ -25,7 +25,7 @@ define a repeatable config-sharing model for `optimal-cli` with versioned schema
       "anon_key_present": true
     },
     "strapi": {
-      "base_url": "https://strapi.op-hub.com",
+      "base_url": "https://strapi.optimal.miami",
       "token_present": true
     }
   },

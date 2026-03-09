@@ -1,4 +1,4 @@
-const STRAPI_URL = process.env.STRAPI_URL || 'https://strapi.op-hub.com'
+const STRAPI_URL = process.env.STRAPI_URL || 'https://strapi.optimal.miami'
 const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN || ''
 
 export interface Newsletter {

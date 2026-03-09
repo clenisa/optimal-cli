@@ -27,7 +27,7 @@ Formatted status report with per-service check/warn/fail indicators:
 Health Check - 2026-03-01 10:00:00
 ▸ n8n           -> running on port 5678
 ▸ Affine        -> running at https://affine.op-hub.com
-▸ Strapi CMS    -> running at https://strapi.op-hub.com
+▸ Strapi CMS    -> running at https://strapi.optimal.miami
 ▸ Git Repos     -> per-repo sync status
 ▸ Docker        -> N containers active
 ▸ OptimalOS     -> dev server on port 3001 (optional)

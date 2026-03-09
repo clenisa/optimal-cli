@@ -11,7 +11,7 @@ All mutations go through skills — frontends in apps/ are read-only dashboards.
 - Database: Supabase (two instances)
   - ReturnPro: vvutttwunexshxkmygik.supabase.co (financial data)
   - OptimalOS: hbfalrpswysryltysonm.supabase.co (kanban board, transactions)
-- CMS: Strapi v5 at https://strapi.op-hub.com/api
+- CMS: Strapi v5 at https://strapi.optimal.miami/api
 - AI: Groq (Llama 3.3 70B) for content generation
 
 ## Commands
@@ -63,7 +63,7 @@ OPTIMAL_SUPABASE_URL=https://hbfalrpswysryltysonm.supabase.co
 OPTIMAL_SUPABASE_SERVICE_KEY=...
 RETURNPRO_SUPABASE_URL=https://vvutttwunexshxkmygik.supabase.co
 RETURNPRO_SUPABASE_SERVICE_KEY=...
-STRAPI_URL=https://strapi.op-hub.com
+STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=...
 GROQ_API_KEY=...
 GROQ_MODEL=llama-3.3-70b-versatile

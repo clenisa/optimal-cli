@@ -235,7 +235,7 @@ RETURNPRO_SUPABASE_SERVICE_KEY=sb_secret_...
 ### Required for CMS Commands
 
 ```bash
-STRAPI_URL=https://strapi.op-hub.com
+STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=your_token_here
 ```
 

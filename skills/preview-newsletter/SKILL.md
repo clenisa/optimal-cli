@@ -43,7 +43,7 @@ Requires: `vercel` CLI installed globally and authenticated.
 
 ## Gotchas
 - **This is just a deploy**: No content generation happens here. Use `generate-newsletter` or `generate-newsletter-insurance` first to create content, then deploy the preview.
-- **Strapi must be reachable**: The preview site fetches content from Strapi at build time and runtime. Strapi must be running at `https://strapi.op-hub.com`.
+- **Strapi must be reachable**: The preview site fetches content from Strapi at build time and runtime. Strapi must be running at `https://strapi.optimal.miami`.
 - **Brand routes**: CRE-11TRUST content at `/cre-11trust`, LIFEINSUR content at `/lifeinsur`.
 
 ## Status

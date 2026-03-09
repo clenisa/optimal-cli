@@ -58,7 +58,7 @@ function getN8nWebhookUrl(): string {
     throw new Error(
       'Missing env var: N8N_WEBHOOK_URL\n' +
         'Set it in your .env file, e.g.:\n' +
-        '  N8N_WEBHOOK_URL=https://n8n.op-hub.com',
+        '  N8N_WEBHOOK_URL=https://n8n.optimal.miami',
     )
   }
   return url.replace(/\/+$/, '')

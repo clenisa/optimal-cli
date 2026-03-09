@@ -24,7 +24,7 @@ RETURNPRO_SUPABASE_URL=https://vvutttwunexshxkmygik.supabase.co
 RETURNPRO_SUPABASE_SERVICE_KEY=<service_role_key>
 
 # Required for content commands
-STRAPI_URL=https://strapi.op-hub.com
+STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=<token>
 GROQ_API_KEY=<key>
 GROQ_MODEL=llama-3.3-70b-versatile

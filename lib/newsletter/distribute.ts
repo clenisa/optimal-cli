@@ -51,7 +51,7 @@ function getWebhookUrl(): string {
   if (!url) {
     throw new Error(
       'Missing env var: N8N_WEBHOOK_URL\n' +
-        'Set it to your n8n base URL, e.g. https://n8n.op-hub.com\n' +
+        'Set it to your n8n base URL, e.g. https://n8n.optimal.miami\n' +
         'The distribute module will POST to: $N8N_WEBHOOK_URL/webhook/newsletter-distribute',
     )
   }

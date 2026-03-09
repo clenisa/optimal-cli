@@ -28,7 +28,7 @@ RETURNPRO_SUPABASE_URL=https://vvutttwunexshxkmygik.supabase.co
 RETURNPRO_SUPABASE_SERVICE_KEY=your_service_key
 
 # Strapi CMS
-STRAPI_URL=https://strapi.op-hub.com
+STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=your_token
 
 # AI Provider
