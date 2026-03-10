@@ -1484,7 +1484,11 @@ config
         process.exit(1)
       }
 
-      const owner = opts.owner || process.env.OPTIMAL_CONFIG_OWNER || process.env.USER || 'oracle'
+      const owner = opts.owner || process.env.OPTIMAL_CONFIG_OWNER || process.env.USER
+      if (!owner) {
+        console.error('error: owner required. Set --owner, OPTIMAL_CONFIG_OWNER, or USER env var')
+        process.exit(1)
+      }
       const payload: OptimalConfigV1 = {
         version: '1.0.0',
         profile: {
@@ -1603,7 +1607,12 @@ configSync
   .command('pull')
   .description('Pull config profile from shared registry into local config')
   .option('--profile <name>', 'Registry profile name', 'default')
-  .action(async (opts: { profile: string }) => {
+  .option('--owner <name>', 'Config owner (defaults to local config or OPTIMAL_CONFIG_OWNER)')
+  .action(async (opts: { profile: string; owner?: string }) => {
+    // Set env override if --owner provided
+    if (opts.owner) {
+      process.env.OPTIMAL_CONFIG_OWNER = opts.owner
+    }
     const result = await pullRegistryProfile(opts.profile)
     const stamp = new Date().toISOString()
     await appendHistory(`${stamp} sync.pull profile=${opts.profile} ok=${result.ok} msg=${result.message}`)
@@ -1617,11 +1626,20 @@ configSync
 configSync
   .command('push')
   .description('Push local config profile to shared registry')
-  .requiredOption('--agent <name>', 'Agent/owner name for the config profile')
+  .option('--agent <name>', 'Agent/owner name (defaults to local config or OPTIMAL_CONFIG_OWNER)')
   .option('--profile <name>', 'Registry profile name', 'default')
   .option('--force', 'Force write even on conflict', false)
-  .action(async (opts: { agent: string; profile: string; force?: boolean }) => {
-    const result = await pushRegistryProfile(opts.profile, Boolean(opts.force), opts.agent)
+  .action(async (opts: { agent?: string; profile: string; force?: boolean }) => {
+    const agent = opts.agent || process.env.OPTIMAL_CONFIG_OWNER
+    if (!agent) {
+      // Try to get from local config
+      const local = await readLocalConfig()
+      if (!local?.profile?.owner) {
+        console.error('error: owner required. Set --agent, OPTIMAL_CONFIG_OWNER, or local config profile.owner')
+        process.exit(1)
+      }
+    }
+    const result = await pushRegistryProfile(opts.profile, Boolean(opts.force), agent)
     const stamp = new Date().toISOString()
     await appendHistory(`${stamp} sync.push agent=${opts.agent} profile=${opts.profile} force=${Boolean(opts.force)} ok=${result.ok} msg=${result.message}`)
     if (!result.ok) {
