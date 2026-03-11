@@ -1451,6 +1451,27 @@ program
     }
     const dryRun = !opts.execute
 
+    // Guard: require at least one filter when --execute is used
+    if (!dryRun) {
+      const hasFilters = Object.values(filters).some(v => v) || opts.userId
+      if (!hasFilters) {
+        console.error('Error: --execute requires at least one filter (--user-id, --date-from, --date-to, --source, --category, --account-code, or --month)')
+        console.error('Preview mode (without --execute) is safe and will show what would be deleted.')
+        process.exit(1)
+      }
+      // Confirmation prompt
+      const readline = await import('readline')
+      const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+      const confirm = await new Promise<string>(resolve => {
+        rl.question(`\n⚠️  About to DELETE from ${table} with filters: ${JSON.stringify(filters)}\nType "yes" to confirm: `, resolve)
+      })
+      rl.close()
+      if (confirm.trim().toLowerCase() !== 'yes') {
+        console.log('Cancelled.')
+        process.exit(0)
+      }
+    }
+
     if (dryRun) {
       const preview = await previewBatch({ table, userId: opts.userId, filters })
       console.log(`Preview: ${preview.matchCount} rows would be deleted from ${table}`)
