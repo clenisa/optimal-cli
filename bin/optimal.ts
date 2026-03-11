@@ -135,6 +135,7 @@ board
   .option('--mine <agent>', 'Show only tasks claimed by agent')
   .option('-w, --watch', 'Watch for changes (refresh every 30s)', false)
   .option('--interval <seconds>', 'Watch refresh interval in seconds', '30')
+  .option('-j, --json', 'Output as JSON (for scripting/agentic use)', false)
   .action(async (opts) => {
     const filters: { project_id?: string; status?: TaskStatus; claimed_by?: string } = {}
     if (opts.project) {
@@ -144,12 +145,15 @@ board
     if (opts.status) filters.status = opts.status as TaskStatus
     if (opts.mine) filters.claimed_by = opts.mine
     
-    if (opts.watch) {
+    const tasks = await listTasks(filters)
+    
+    if (opts.json) {
+      console.log(JSON.stringify(tasks, null, 2))
+    } else if (opts.watch) {
       const interval = parseInt(opts.interval) * 1000
       console.log(`Watching board (refresh every ${opts.interval}s, Ctrl+C to stop)...`)
       let lastCount = 0
       while (true) {
-        const tasks = await listTasks(filters)
         if (tasks.length !== lastCount) {
           console.clear()
           console.log(`Updated: ${new Date().toISOString()}`)
@@ -159,7 +163,6 @@ board
         await new Promise(r => setTimeout(r, interval))
       }
     } else {
-      const tasks = await listTasks(filters)
       console.log(formatBoardTable(tasks))
     }
   })
