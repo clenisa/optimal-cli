@@ -51,6 +51,7 @@ import {
   hashConfig,
   pullRegistryProfile,
   pushRegistryProfile,
+  listRegistryProfiles,
   readLocalConfig,
   writeLocalConfig,
 } from '../lib/config/registry.js'
@@ -1600,6 +1601,36 @@ config
       console.log(`Imported config from ${opts.in}`)
     } catch (err) {
       console.error(`Config import failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('list')
+  .description('List all profiles in the shared registry')
+  .option('--owner <name>', 'Filter by owner')
+  .action(async (opts: { owner?: string }) => {
+    try {
+      const profiles = await listRegistryProfiles()
+      const filtered = opts.owner ? profiles.filter(p => p.owner === opts.owner) : profiles
+
+      if (filtered.length === 0) {
+        console.log('No profiles found in registry.')
+        if (opts.owner) {
+          console.log(`  (no profiles for owner: ${opts.owner})`)
+        }
+        return
+      }
+
+      console.log('| Owner         | Profile   | Version   | Updated              |')
+      console.log('|---------------|-----------|-----------|----------------------|')
+      for (const p of filtered) {
+        const updated = p.updated_at ? new Date(p.updated_at).toISOString().slice(0, 19).replace('T', ' ') : 'n/a'
+        console.log(`| ${p.owner.padEnd(13)} | ${p.profile.padEnd(9)} | ${(p.config_version || 'n/a').padEnd(9)} | ${updated} |`)
+      }
+      console.log(`\n${filtered.length} profile(s)`)
+    } catch (err) {
+      console.error(`Config list failed: ${err instanceof Error ? err.message : String(err)}`)
       process.exit(1)
     }
   })

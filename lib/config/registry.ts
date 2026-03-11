@@ -137,6 +137,28 @@ export async function pullRegistryProfile(profile = 'default'): Promise<Registry
   }
 }
 
+export type RegistryProfile = {
+  owner: string
+  profile: string
+  config_version: string
+  payload_hash: string
+  updated_at: string
+}
+
+export async function listRegistryProfiles(): Promise<RegistryProfile[]> {
+  const supabase = getActiveSupabaseProvider()('optimal')
+  const { data, error } = await supabase
+    .from(REGISTRY_TABLE)
+    .select('owner,profile,config_version,payload_hash,updated_at')
+    .order('updated_at', { ascending: false })
+
+  if (error) {
+    throw new Error(`registry list failed: ${error.message}`)
+  }
+
+  return (data || []) as RegistryProfile[]
+}
+
 export async function pushRegistryProfile(profile = 'default', force = false, agent?: string): Promise<RegistrySyncResult> {
   try {
     const local = await readLocalConfig()
