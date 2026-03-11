@@ -1140,17 +1140,23 @@ program
   .description('View pending social posts ready for publishing')
   .requiredOption('--brand <brand>', 'Brand: CRE-11TRUST or LIFEINSUR')
   .action(async (opts: { brand: string }) => {
-    const queue = await getPublishQueue(opts.brand)
-    if (queue.length === 0) {
-      console.log('No posts in queue')
-      return
+    try {
+      const queue = await getPublishQueue(opts.brand)
+      if (queue.length === 0) {
+        console.log('No posts in queue')
+        return
+      }
+      console.log('| Date | Platform | Headline |')
+      console.log('|------|----------|----------|')
+      for (const p of queue) {
+        console.log(`| ${p.scheduled_date} | ${p.platform} | ${p.headline} |`)
+      }
+      console.log(`\n${queue.length} posts queued`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      fmtError(`Failed to fetch social queue: ${msg}`)
+      process.exit(1)
     }
-    console.log('| Date | Platform | Headline |')
-    console.log('|------|----------|----------|')
-    for (const p of queue) {
-      console.log(`| ${p.scheduled_date} | ${p.platform} | ${p.headline} |`)
-    }
-    console.log(`\n${queue.length} posts queued`)
   })
 
 // ── Publish to Instagram via Meta Graph API ─────────────────────────
@@ -1248,15 +1254,21 @@ program
   .description('List unpublished blog post drafts')
   .option('--site <site>', 'Filter by site (portfolio, insurance)')
   .action(async (opts: { site?: string }) => {
-    const drafts = await listBlogDrafts(opts.site)
-    if (drafts.length === 0) {
-      console.log('No drafts found')
-      return
-    }
-    console.log('| Created | Site | Title | Slug |')
-    console.log('|---------|------|-------|------|')
-    for (const d of drafts) {
-      console.log(`| ${d.createdAt.slice(0, 10)} | ${d.site} | ${d.title} | ${d.slug} |`)
+    try {
+      const drafts = await listBlogDrafts(opts.site)
+      if (drafts.length === 0) {
+        console.log('No drafts found')
+        return
+      }
+      console.log('| Created | Site | Title | Slug |')
+      console.log('|---------|------|-------|------|')
+      for (const d of drafts) {
+        console.log(`| ${d.createdAt.slice(0, 10)} | ${d.site} | ${d.title} | ${d.slug} |`)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      fmtError(`Failed to fetch blog drafts: ${msg}`)
+      process.exit(1)
     }
   })
 
