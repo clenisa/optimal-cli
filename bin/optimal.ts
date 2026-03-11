@@ -1466,6 +1466,8 @@ const config = program.command('config').description('Manage optimal-cli local/s
 Examples:
   $ optimal config init --owner oracle --brand CRE-11TRUST
   $ optimal config doctor
+  $ optimal config show
+  $ optimal config show --json
   $ optimal config export --out ./backup.json
   $ optimal config import --in ./backup.json
   $ optimal config sync pull
@@ -1551,6 +1553,55 @@ config
       console.log(`history: ${getHistoryPath()}`)
     } catch (err) {
       console.error(`Config doctor failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+config
+  .command('show')
+  .description('Display current local config in full')
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { json?: boolean }) => {
+    try {
+      const cfg = await readLocalConfig()
+      if (!cfg) {
+        console.log(`No local config found at ${getLocalConfigPath()}`)
+        process.exit(1)
+      }
+      if (opts.json) {
+        console.log(JSON.stringify(cfg, null, 2))
+      } else {
+        console.log('╔══════════════════════════════════════════════════════════╗')
+        console.log('║  Optimal CLI Config                                       ║')
+        console.log('╚══════════════════════════════════════════════════════════╝')
+        console.log(`path:      ${getLocalConfigPath()}`)
+        console.log(`version:   ${cfg.version}`)
+        console.log('')
+        console.log('Profile:')
+        console.log(`  name:      ${cfg.profile.name}`)
+        console.log(`  owner:     ${cfg.profile.owner}`)
+        console.log(`  updated:   ${cfg.profile.updated_at}`)
+        console.log('')
+        console.log('Defaults:')
+        console.log(`  brand:     ${cfg.defaults?.brand || 'not set'}`)
+        console.log(`  timezone:  ${cfg.defaults?.timezone || 'not set'}`)
+        console.log('')
+        console.log('Providers:')
+        console.log(`  supabase:`)
+        console.log(`    project_ref: ${cfg.providers?.supabase?.project_ref}`)
+        console.log(`    url:         ${cfg.providers?.supabase?.url}`)
+        console.log(`    anon_key:    ${cfg.providers?.supabase?.anon_key_present ? 'present' : 'missing'}`)
+        console.log(`  strapi:`)
+        console.log(`    base_url:  ${cfg.providers?.strapi?.base_url}`)
+        console.log(`    token:     ${cfg.providers?.strapi?.token_present ? 'present' : 'missing'}`)
+        console.log('')
+        console.log('Features:')
+        console.log(`  cms:     ${cfg.features?.cms ? 'enabled' : 'disabled'}`)
+        console.log(`  tasks:   ${cfg.features?.tasks ? 'enabled' : 'disabled'}`)
+        console.log(`  deploy:  ${cfg.features?.deploy ? 'enabled' : 'disabled'}`)
+      }
+    } catch (err) {
+      console.error(`Config show failed: ${err instanceof Error ? err.message : String(err)}`)
       process.exit(1)
     }
   })
