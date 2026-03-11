@@ -11,7 +11,10 @@ import {
 
 const TEST_SLUG = `test-${Date.now()}`
 
-test('full board lifecycle', async () => {
+// Skip integration tests when supabase credentials aren't available
+const hasSupabaseCreds = !!(process.env.OPTIMAL_SUPABASE_URL && process.env.OPTIMAL_SUPABASE_SERVICE_KEY)
+
+test('full board lifecycle', { skip: !hasSupabaseCreds }, async () => {
   // Create project
   const project = await createProject({ slug: TEST_SLUG, name: 'Integration Test', priority: 4 })
   assert.ok(project.id)
