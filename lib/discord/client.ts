@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, type Guild } from 'discord.js'
+import { Client, GatewayIntentBits, Events, Partials, type Guild } from 'discord.js'
 import 'dotenv/config'
 
 let client: Client | null = null
@@ -13,6 +13,12 @@ export function getDiscordClient(): Client {
       GatewayIntentBits.GuildMessageReactions,
       GatewayIntentBits.MessageContent,
     ],
+    partials: [
+      Partials.Message,
+      Partials.Channel,
+      Partials.Reaction,
+      Partials.User,
+    ],
   })
 
   return client
@@ -25,6 +31,12 @@ export async function connectDiscord(): Promise<Guild> {
   if (!guildId) throw new Error('Missing DISCORD_GUILD_ID env var')
 
   const c = getDiscordClient()
+
+  if (c.isReady()) {
+    const guild = c.guilds.cache.get(guildId)
+    if (!guild) throw new Error(`Guild ${guildId} not found. Is the bot invited?`)
+    return guild
+  }
 
   await new Promise<void>((resolve, reject) => {
     c.once(Events.ClientReady, () => resolve())

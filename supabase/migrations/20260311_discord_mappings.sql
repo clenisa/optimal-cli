@@ -18,6 +18,18 @@ create index idx_discord_mappings_task on discord_mappings(task_id) where task_i
 -- Index for lookups by discord_thread_id
 create index idx_discord_mappings_thread on discord_mappings(discord_thread_id) where discord_thread_id is not null;
 
--- RLS policy (service role only — no user-facing access)
+-- Auto-update updated_at on row modification
+create or replace function update_discord_mappings_updated_at()
+returns trigger as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_discord_mappings_updated_at
+  before update on discord_mappings
+  for each row execute function update_discord_mappings_updated_at();
+
+-- RLS: service role bypasses RLS, deny all other roles
 alter table discord_mappings enable row level security;
-create policy "service_role_all" on discord_mappings for all using (true) with check (true);

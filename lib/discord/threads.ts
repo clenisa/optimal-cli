@@ -31,7 +31,7 @@ export async function createThreadForTask(guild: Guild, task: Task): Promise<Thr
 
   await thread.send(
     `**${priorityLabel}** | Assigned: ${assignee} | Status: ${task.status}\n\n${description}\n\n` +
-    `*React with wave to claim, arrows to start, check to complete, no_entry to block, eyes for review*`
+    `*React: \u{1F44B} claim | \u{1F504} in progress | \u2705 done | \u{1F6AB} blocked | \u{1F440} review*`
   )
 
   await createMapping({

@@ -1,7 +1,7 @@
 import { ChannelType, type Guild, type TextChannel } from 'discord.js'
-import { listTasks, type Task, type TaskStatus } from '../board/index.js'
-import { listMappings, type ChannelMapping } from '../discord/channels.js'
-import { createTaskFromThread } from '../discord/threads.js'
+import { listTasks, updateTask, type Task, type TaskStatus } from '../board/index.js'
+import { listMappings, getMappingByTask, type ChannelMapping } from '../discord/channels.js'
+import { createTaskFromThread, archiveThread } from '../discord/threads.js'
 
 export interface SyncDiff {
   inSupabaseOnly: Task[]
@@ -75,6 +75,7 @@ export async function pullDiscordToSupabase(
   let updated = 0
   const errors: string[] = []
 
+  // Create Supabase tasks for unmapped Discord threads
   for (const thread of diff.inDiscordOnly) {
     if (dryRun) {
       console.log(`[dry-run] Would create task from thread: "${thread.name}"`)
@@ -91,6 +92,39 @@ export async function pullDiscordToSupabase(
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       errors.push(`${thread.name}: ${msg}`)
+    }
+  }
+
+  // Reconcile status mismatches
+  for (const mismatch of diff.statusMismatch) {
+    if (mismatch.threadArchived && mismatch.task.status !== 'done') {
+      // Thread archived but task active — archive means done in Discord-as-source-of-truth
+      if (dryRun) {
+        console.log(`[dry-run] Would mark done: "${mismatch.task.title}" (thread archived)`)
+      } else {
+        try {
+          await updateTask(mismatch.task.id, { status: 'done', completed_at: new Date().toISOString() }, 'discord-sync')
+          console.log(`Marked done: "${mismatch.task.title}" (thread archived)`)
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e)
+          errors.push(`${mismatch.task.title}: ${msg}`)
+        }
+      }
+      updated++
+    } else if (!mismatch.threadArchived && (mismatch.task.status === 'done' || mismatch.task.status === 'backlog')) {
+      // Task done but thread still active — archive the thread to match
+      if (dryRun) {
+        console.log(`[dry-run] Would archive thread for: "${mismatch.task.title}" (task done)`)
+      } else {
+        try {
+          await archiveThread(guild, mismatch.task.id)
+          console.log(`Archived thread for: "${mismatch.task.title}" (task done)`)
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e)
+          errors.push(`${mismatch.task.title}: ${msg}`)
+        }
+      }
+      updated++
     }
   }
 
