@@ -261,6 +261,66 @@ board
     console.log(`\n${entries.length} entries`)
   })
 
+board
+  .command('stats')
+  .description('Show task statistics by status and priority')
+  .option('-p, --project <slug>', 'Filter by project slug')
+  .action(async (opts) => {
+    // Check for supabase env vars
+    if (!process.env.OPTIMAL_SUPABASE_URL || !process.env.OPTIMAL_SUPABASE_SERVICE_KEY) {
+      fmtWarn('Supabase not configured. Set OPTIMAL_SUPABASE_URL and OPTIMAL_SUPABASE_SERVICE_KEY')
+      return
+    }
+    const filters: { project_id?: string } = {}
+    if (opts.project) {
+      const proj = await getProjectBySlug(opts.project)
+      filters.project_id = proj.id
+    }
+    const tasks = await listTasks(filters)
+    
+    // Count by status
+    const byStatus: Record<string, number> = {}
+    // Count by priority
+    const byPriority: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 }
+    // Count by assignee
+    const byAssignee: Record<string, number> = { unassigned: 0 }
+    
+    for (const t of tasks) {
+      byStatus[t.status] = (byStatus[t.status] || 0) + 1
+      byPriority[t.priority] = (byPriority[t.priority] || 0) + 1
+      if (t.assigned_to) {
+        byAssignee[t.assigned_to] = (byAssignee[t.assigned_to] || 0) + 1
+      } else {
+        byAssignee.unassigned++
+      }
+    }
+    
+    console.log(`\n📊 Board Stats${opts.project ? ` (${opts.project})` : ''}: ${tasks.length} total\n`)
+    
+    console.log('By Status:')
+    const statusOrder = ['ready', 'in_progress', 'in_review', 'blocked', 'done']
+    for (const s of statusOrder) {
+      const count = byStatus[s] || 0
+      const pct = tasks.length > 0 ? Math.round((count / tasks.length) * 100) : 0
+      console.log(`  ${statusBadge(s).padEnd(12)} ${String(count).padStart(3)} (${pct.toString().padStart(3)}%)`)
+    }
+    
+    console.log('\nBy Priority:')
+    const priorityLabels = { 1: '🔴 Critical', 2: '🟡 High', 3: '🟢 Medium', 4: '⚪ Low' }
+    for (const p of [1, 2, 3, 4] as const) {
+      const count = byPriority[p] || 0
+      const pct = tasks.length > 0 ? Math.round((count / tasks.length) * 100) : 0
+      console.log(`  ${priorityLabels[p].padEnd(14)} ${String(count).padStart(3)} (${pct.toString().padStart(3)}%)`)
+    }
+    
+    console.log('\nBy Assignee:')
+    const sortedAssignees = Object.entries(byAssignee).sort((a, b) => b[1] - a[1])
+    for (const [assignee, count] of sortedAssignees) {
+      const pct = tasks.length > 0 ? Math.round((count / tasks.length) * 100) : 0
+      console.log(`  ${assignee.padEnd(12)} ${String(count).padStart(3)} (${pct.toString().padStart(3)}%)`)
+    }
+  })
+
 // --- Kanban Sync Commands ---
 import { fetchSupabaseTasks, fetchObsidianTasks, diffKanban, syncObsidianToSupabase, syncSupabaseToObsidian, printKanban, supabase as kanbanSupabase } from '../lib/kanban/sync.js'
 
