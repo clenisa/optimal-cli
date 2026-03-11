@@ -17,7 +17,17 @@ npx optimal-cli <command>
 
 ## Quick Start
 
-1. **Set up environment variables** in `~/.optimal/.env`:
+1. **Install the CLI**:
+```bash
+npm install -g optimal-cli
+```
+
+2. **Initialize local config**:
+```bash
+optimal config init --owner yourname
+```
+
+3. **Set up environment variables** in `~/.optimal/.env`:
 ```bash
 # OptimalOS Supabase (for config sync, kanban)
 OPTIMAL_SUPABASE_URL=https://hbfalrpswysryltysonm.supabase.co
@@ -31,18 +41,18 @@ RETURNPRO_SUPABASE_SERVICE_KEY=your_service_key
 STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=your_token
 
-# AI Provider
+# AI Provider (for content generation)
 OPENAI_API_KEY=your_key
 ```
 
-2. **Authenticate** (required for config sync):
+4. **Verify setup**:
 ```bash
-optimal auth login
+optimal doctor
 ```
 
-3. **Sync your agent config**:
+5. **Sync your agent config** (optional):
 ```bash
-optimal config push --agent kimklaw
+optimal config push --agent youragent
 ```
 
 ## Commands
@@ -138,19 +148,19 @@ All config sync operations require Supabase authentication. The CLI uses your se
 
 1. **Oracle (primary)** makes config changes:
    ```bash
-   optimal config push --agent oracle
+   optimal config sync push --profile oracle
    ```
 
 2. **Opal** pulls latest config:
    ```bash
-   optimal config pull --agent oracle
+   optimal config sync pull --profile oracle
    # or
-   optimal config sync --agent oracle
+   optimal config sync
    ```
 
-3. **Kimklaw** verifies sync:
+3. **Verify sync**:
    ```bash
-   optimal config diff --agent oracle
+   optimal config list
    ```
 
 ## Development
