@@ -66,6 +66,11 @@ import {
   success, error as fmtError, warn as fmtWarn, info as fmtInfo,
 } from '../lib/format.js'
 import {
+  connectDiscord, disconnectDiscord, initProjectChannels,
+  pushTasksToThreads, startWatch,
+} from '../lib/discord/index.js'
+import { diffDiscordSupabase, pullDiscordToSupabase, formatSyncDiff } from '../lib/kanban/discord-sync.js'
+import {
   listAssets, createAsset, updateAsset, getAsset, deleteAsset,
   trackAssetUsage, listAssetUsage, formatAssetTable,
   type AssetType, type AssetStatus,
@@ -2116,6 +2121,80 @@ asset
       console.log(`${e.created_at} | ${(e.actor ?? '-').padEnd(10)} | ${e.event} ${Object.keys(e.metadata).length > 0 ? JSON.stringify(e.metadata) : ''}`)
     }
     console.log(`\n${events.length} events`)
+  })
+
+// --- Discord Sync ---
+
+const sync = program.command('sync').description('Cross-platform sync operations')
+
+sync
+  .command('discord:init')
+  .description('Create Discord channels for all active projects')
+  .option('--dry-run', 'Preview without creating', false)
+  .action(async (opts: { dryRun: boolean }) => {
+    const guild = await connectDiscord()
+    try {
+      const result = await initProjectChannels(guild, opts.dryRun)
+      console.log(`\nChannels: ${result.created} created, ${result.existing} already mapped`)
+    } finally {
+      await disconnectDiscord()
+    }
+  })
+
+sync
+  .command('discord:push')
+  .description('Push Supabase tasks to Discord threads')
+  .option('--dry-run', 'Preview without creating', false)
+  .action(async (opts: { dryRun: boolean }) => {
+    const guild = await connectDiscord()
+    try {
+      const result = await pushTasksToThreads(guild, opts.dryRun)
+      console.log(`\nThreads: ${result.created} created, ${result.skipped} skipped`)
+      if (result.errors.length > 0) {
+        console.error(`Errors:\n  ${result.errors.join('\n  ')}`)
+      }
+    } finally {
+      await disconnectDiscord()
+    }
+  })
+
+sync
+  .command('discord:pull')
+  .description('Pull Discord thread state into Supabase')
+  .option('--dry-run', 'Preview without changes', false)
+  .action(async (opts: { dryRun: boolean }) => {
+    const guild = await connectDiscord()
+    try {
+      const result = await pullDiscordToSupabase(guild, opts.dryRun)
+      console.log(`\nPulled: ${result.created} created, ${result.updated} updated`)
+      if (result.errors.length > 0) {
+        console.error(`Errors:\n  ${result.errors.join('\n  ')}`)
+      }
+    } finally {
+      await disconnectDiscord()
+    }
+  })
+
+sync
+  .command('discord:status')
+  .description('Show diff between Discord threads and Supabase tasks')
+  .action(async () => {
+    const guild = await connectDiscord()
+    try {
+      const diff = await diffDiscordSupabase(guild)
+      console.log(formatSyncDiff(diff))
+    } finally {
+      await disconnectDiscord()
+    }
+  })
+
+sync
+  .command('discord:watch')
+  .description('Start live Discord bot — syncs signals and threads in real-time')
+  .option('--users <ids>', 'Comma-separated Discord user IDs to allowlist', '')
+  .action(async (opts: { users: string }) => {
+    const allowedUserIds = opts.users ? opts.users.split(',').filter(Boolean) : undefined
+    await startWatch({ allowedUserIds })
   })
 
 program.parseAsync()
