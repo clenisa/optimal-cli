@@ -1,0 +1,16 @@
+[Unit]
+Description=Optimal CLI Discord Sync Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oracle
+WorkingDirectory=/home/oracle/optimal-cli
+ExecStart=/home/oracle/.bun/bin/bun run bin/optimal.ts sync discord:watch --users 187966892168839168
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/oracle/optimal-cli/.env
+
+[Install]
+WantedBy=multi-user.target

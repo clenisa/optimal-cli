@@ -44,6 +44,18 @@ supabase/ — consolidated migrations
 - `optimal board refresh` — Real-time board monitoring with --watch mode
 - Sync functions in lib/kanban/sync.ts
 
+## Discord Sync (Discord ↔ Supabase)
+- `optimal sync discord:init` — Create Discord channels for all active projects
+- `optimal sync discord:push` — Push Supabase tasks to Discord threads (one-time migration)
+- `optimal sync discord:pull` — Pull Discord thread state into Supabase
+- `optimal sync discord:status` — Show diff between Discord and Supabase
+- `optimal sync discord:watch` — Start live bot (runs as systemd service `optimal-discord`)
+- Sync functions in lib/kanban/discord-sync.ts
+- Discord client/channels/threads/signals in lib/discord/
+- Mappings stored in `discord_mappings` Supabase table
+- Signal conventions: wave=claim, arrows=in_progress, check=done, no_entry=blocked, eyes=review
+- Text commands in threads: /status, /assign, /priority, /note
+
 ## Supabase Tables (Board — OptimalOS Instance)
 | Table | Purpose |
 |-------|---------|
@@ -54,6 +66,7 @@ supabase/ — consolidated migrations
 | task_labels | Join table: tasks ↔ labels |
 | comments | Task comments with type (comment, status_change, claim, review) |
 | activity_log | Audit trail of all agent/user activity |
+| discord_mappings | Discord channel/thread ↔ project/task mapping |
 
 ## Supabase Tables (Financial — ReturnPro Instance)
 | Table | Purpose |
@@ -76,3 +89,5 @@ GROQ_API_KEY=...
 GROQ_MODEL=llama-3.3-70b-versatile
 NEWSAPI_KEY=...
 NEWSAPI_QUERY=south florida commercial real estate
+DISCORD_BOT_TOKEN=...
+DISCORD_GUILD_ID=885294091825455115
