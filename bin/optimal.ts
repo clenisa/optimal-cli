@@ -98,6 +98,7 @@ try {
 
 const program = new Command()
   .name('optimal')
+  .showSuggestionAfterError()
   .description('Optimal CLI — unified skills for financial analytics, content, and infra')
   .version(CLI_VERSION)
   .addHelpText('after', `
