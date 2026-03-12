@@ -5,7 +5,7 @@ import {
   createProject, getProjectBySlug, listProjects, updateProject,
   createMilestone, listMilestones,
   createLabel, listLabels,
-  createTask, updateTask, getTask, listTasks, claimTask, completeTask,
+  createTask, updateTask, getTask, listTasks, claimTask, completeTask, deleteTask,
   addComment, listComments,
   logActivity, listActivity,
   formatBoardTable, getNextClaimable,
@@ -109,8 +109,9 @@ const program = new Command()
   .addHelpText('after', `
 Examples:
   $ optimal board view                              View the kanban board
-  $ optimal board view -s in_progress               Filter board by status
+  $ optimal board view -s in_progress               Filter by status
   $ optimal board claim --id <uuid> --agent bot1     Claim a task
+  $ optimal board delete --id <uuid>                Delete a task
   $ optimal project list                            List all projects
   $ optimal publish-instagram --brand CRE-11TRUST   Publish to Instagram
   $ optimal social-queue --brand CRE-11TRUST        View social post queue
@@ -131,11 +132,14 @@ Examples:
   $ optimal board view -s ready --mine bot1   Show bot1's ready tasks
   $ optimal board create -t "Fix bug" -p cli-consolidation
   $ optimal board claim --id <uuid> --agent bot1
+  $ optimal board delete --id <uuid>          Delete a task (with confirmation)
+  $ optimal board delete --id <uuid> --dry-run
   $ optimal board log --actor bot1 --limit 5
 `)
 
 board
   .command('view')
+  .alias('list')
   .description('Display the kanban board')
   .option('-p, --project <slug>', 'Project slug')
   .option('-s, --status <status>', 'Filter by status')
@@ -144,12 +148,18 @@ board
   .option('--interval <seconds>', 'Watch refresh interval in seconds', '30')
   .option('-j, --json', 'Output as JSON (for scripting/agentic use)', false)
   .action(async (opts) => {
-    const filters: { project_id?: string; status?: TaskStatus; claimed_by?: string } = {}
+    const filters: { project_id?: string; status?: TaskStatus; statuses?: TaskStatus[]; claimed_by?: string } = {}
     if (opts.project) {
       const proj = await getProjectBySlug(opts.project)
       filters.project_id = proj.id
     }
-    if (opts.status) filters.status = opts.status as TaskStatus
+    if (opts.status) {
+      if (opts.status.includes(',')) {
+        filters.statuses = opts.status.split(',').map((s: string) => s.trim()) as TaskStatus[]
+      } else {
+        filters.status = opts.status as TaskStatus
+      }
+    }
     if (opts.mine) filters.claimed_by = opts.mine
     
     const tasks = await listTasks(filters)
@@ -214,16 +224,19 @@ board
   .requiredOption('--id <uuid>', 'Task ID')
   .option('-s, --status <status>', 'New status')
   .option('-a, --agent <name>', 'Assign to agent')
+  .option('--assigned-to <name>', 'Assign to agent (alias for -a/--agent)')
   .option('--priority <n>', 'New priority')
   .option('-m, --message <msg>', 'Log message (adds comment)')
   .action(async (opts) => {
+    // Support both -a/--agent and --assigned-to
+    const assignedTo = opts.agent ?? opts.assignedTo
     const updates: Record<string, unknown> = {}
     if (opts.status) updates.status = opts.status
-    if (opts.agent) updates.assigned_to = opts.agent
+    if (assignedTo) updates.assigned_to = assignedTo
     if (opts.priority) updates.priority = parseInt(opts.priority)
     if (opts.status === 'done') updates.completed_at = new Date().toISOString()
-    const task = await updateTask(opts.id, updates, opts.agent ?? 'cli')
-    if (opts.message) await addComment({ task_id: task.id, author: opts.agent ?? 'cli', body: opts.message })
+    const task = await updateTask(opts.id, updates, assignedTo ?? 'cli')
+    if (opts.message) await addComment({ task_id: task.id, author: assignedTo ?? 'cli', body: opts.message })
     success(`Updated: ${task.title} -> ${statusBadge(task.status)}`)
   })
 
@@ -235,6 +248,42 @@ board
   .action(async (opts) => {
     const task = await claimTask(opts.id, opts.agent)
     success(`Claimed: ${colorize(task.title, 'cyan')} by ${colorize(opts.agent, 'bold')}`)
+  })
+
+board
+  .command('delete')
+  .description('Delete a task (with confirmation)')
+  .requiredOption('--id <uuid>', 'Task ID')
+  .option('-y, --yes', 'Skip confirmation (auto-confirm)')
+  .option('--dry-run', 'Show what would be deleted without actually deleting')
+  .action(async (opts) => {
+    // First get task info for display
+    const task = await getTask(opts.id)
+    console.log(`Task: ${task.title}`)
+    console.log(`Status: ${task.status}`)
+    console.log(`Project: ${task.project_id}`)
+
+    if (opts.dryRun) {
+      console.log(`\n🔍 Dry run: would delete task "${task.title}" (${task.id})`)
+      console.log('No changes made.')
+      return
+    }
+
+    if (!opts.yes) {
+      const readline = await import('readline')
+      const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+      const confirm = await new Promise<string>(resolve => {
+        rl.question(`\n⚠️  Delete task "${task.title}"? Type "yes" to confirm: `, resolve)
+      })
+      rl.close()
+      if (confirm.trim().toLowerCase() !== 'yes') {
+        console.log('Cancelled.')
+        process.exit(0)
+      }
+    }
+
+    const result = await deleteTask(opts.id)
+    success(`Deleted: ${result.title} (${result.id})`)
   })
 
 board
@@ -2191,10 +2240,9 @@ sync
 sync
   .command('discord:watch')
   .description('Start live Discord bot — syncs signals and threads in real-time')
-  .option('--users <ids>', 'Comma-separated Discord user IDs to allowlist', '')
-  .action(async (opts: { users: string }) => {
-    const allowedUserIds = opts.users ? opts.users.split(',').filter(Boolean) : undefined
-    await startWatch({ allowedUserIds })
+  .option('--role <name>', 'Required Discord role name for access', 'Optimal')
+  .action(async (opts: { role: string }) => {
+    await startWatch({ requiredRole: opts.role })
   })
 
 program.parseAsync()

@@ -216,12 +216,14 @@ export async function getTask(taskId: string): Promise<Task> {
 export async function listTasks(opts?: {
   project_id?: string
   status?: TaskStatus
+  statuses?: TaskStatus[]
   claimed_by?: string
   assigned_to?: string
 }): Promise<Task[]> {
   let query = sb().from('tasks').select('*')
   if (opts?.project_id) query = query.eq('project_id', opts.project_id)
-  if (opts?.status) query = query.eq('status', opts.status)
+  if (opts?.statuses && opts.statuses.length > 0) query = query.in('status', opts.statuses)
+  else if (opts?.status) query = query.eq('status', opts.status)
   if (opts?.claimed_by) query = query.eq('claimed_by', opts.claimed_by)
   if (opts?.assigned_to) query = query.eq('assigned_to', opts.assigned_to)
   query = query.order('priority', { ascending: true }).order('sort_order', { ascending: true })
@@ -246,6 +248,23 @@ export async function completeTask(taskId: string, actor: string): Promise<Task>
     status: 'done',
     completed_at: new Date().toISOString(),
   }, actor)
+}
+
+export async function deleteTask(taskId: string): Promise<{ id: string; title: string }> {
+  const task = await getTask(taskId)
+  const { error } = await sb()
+    .from('tasks')
+    .delete()
+    .eq('id', taskId)
+  if (error) throw new Error(`Failed to delete task ${taskId}: ${error.message}`)
+  await logActivity({
+    task_id: taskId,
+    project_id: task.project_id,
+    actor: 'system',
+    action: 'deleted',
+    old_value: { title: task.title, status: task.status },
+  })
+  return { id: taskId, title: task.title }
 }
 
 // --- Comments ---
