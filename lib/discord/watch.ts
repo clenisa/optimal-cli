@@ -1,22 +1,20 @@
 import { Events, type ThreadChannel } from 'discord.js'
 import { getDiscordClient, connectDiscord, disconnectDiscord } from './client.js'
-import { handleReaction, handleTextCommand, setAllowedUsers } from './signals.js'
+import { handleReaction, handleTextCommand, setRequiredRole } from './signals.js'
 import { createTaskFromThread } from './threads.js'
 import { listMappings } from './channels.js'
 
 export interface WatchOptions {
-  allowedUserIds?: string[]
+  requiredRole?: string
 }
 
 export async function startWatch(opts?: WatchOptions): Promise<void> {
-  if (opts?.allowedUserIds) {
-    setAllowedUsers(opts.allowedUserIds)
-  }
-
   const guild = await connectDiscord()
   const client = getDiscordClient()
 
-  console.log('Discord watch started — listening for signals...')
+  const roleName = opts?.requiredRole ?? 'Optimal'
+  setRequiredRole(guild, roleName)
+  console.log(`Discord watch started — listening for signals (required role: ${roleName})...`)
 
   client.on(Events.MessageReactionAdd, async (reaction, user) => {
     try {

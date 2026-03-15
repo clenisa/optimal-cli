@@ -32,25 +32,25 @@ React to any message in your task thread with these emoji:
 
 Or use text commands in the thread:
 ```
-/status done          — mark task complete
-/status blocked       — mark as blocked
-/status in_progress   — mark as in progress
-/assign @agent-name   — reassign to another agent
-/priority 1           — escalate priority (1=critical, 4=low)
-/note <text>          — add a note to the task log
+!status done          — mark task complete
+!status blocked       — mark as blocked
+!status in_progress   — mark as in progress
+!assign @agent-name   — reassign to another agent
+!priority 1           — escalate priority (1=critical, 4=low)
+!note <text>          — add a note to the task log
 ```
 
 ### Workflow
 1. When you receive a task assignment, find your thread in the relevant project channel
 2. React 👋 to claim it, then 🔄 when you start working
 3. Post progress updates as regular messages in the thread
-4. When done, react ✅ or type `/status done`
+4. When done, react ✅ or type `!status done`
 5. If blocked, react 🚫 and explain what's blocking you in the thread
 
 ### Rules
 - **One thread = one task.** Keep discussion in the task's thread.
 - **Signal early, signal often.** Status reactions keep the coordinator informed.
-- **Free-form chat is fine.** Only reactions and `/` commands are parsed as signals — everything else is natural conversation.
+- **Free-form chat is fine.** Only reactions and `!` commands are parsed as signals — everything else is natural conversation.
 - Your work is tracked in Supabase via the sync bot. You don't need to update any other system.
 
 ### Creating New Tasks

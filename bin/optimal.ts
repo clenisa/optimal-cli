@@ -2238,6 +2238,41 @@ sync
   })
 
 sync
+  .command('discord:sync')
+  .description('Bidirectional sync: push Supabase tasks to Discord, then pull Discord state to Supabase')
+  .option('--dry-run', 'Preview without making changes', false)
+  .action(async (opts: { dryRun: boolean }) => {
+    const guild = await connectDiscord()
+    try {
+      // First, show the diff
+      console.log('=== Discord ↔ Supabase Sync ===\n')
+      const diff = await diffDiscordSupabase(guild)
+      console.log(formatSyncDiff(diff))
+      console.log('\n--- Running bidirectional sync ---\n')
+
+      // Push Supabase tasks to Discord
+      console.log('[1/2] Pushing Supabase tasks to Discord...')
+      const pushResult = await pushTasksToThreads(guild, opts.dryRun)
+      console.log(`  Threads: ${pushResult.created} created, ${pushResult.skipped} skipped`)
+      if (pushResult.errors.length > 0) {
+        console.error(`  Errors:\n    ${pushResult.errors.join('\n    ')}`)
+      }
+
+      // Pull Discord threads to Supabase
+      console.log('\n[2/2] Pulling Discord threads to Supabase...')
+      const pullResult = await pullDiscordToSupabase(guild, opts.dryRun)
+      console.log(`  Pulled: ${pullResult.created} created, ${pullResult.updated} updated`)
+      if (pullResult.errors.length > 0) {
+        console.error(`  Errors:\n    ${pullResult.errors.join('\n    ')}`)
+      }
+
+      console.log('\n=== Sync complete ===')
+    } finally {
+      await disconnectDiscord()
+    }
+  })
+
+sync
   .command('discord:watch')
   .description('Start live Discord bot — syncs signals and threads in real-time')
   .option('--role <name>', 'Required Discord role name for access', 'Optimal')

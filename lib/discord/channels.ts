@@ -48,7 +48,7 @@ export async function getMappingByProject(projectId: string): Promise<ChannelMap
     .from('discord_mappings')
     .select('*')
     .eq('project_id', projectId)
-    .is('task_id', null)
+    .is('discord_thread_id', null)
     .single()
   if (error && error.code !== 'PGRST116') throw new Error(`Failed to get mapping: ${error.message}`)
   return (data as ChannelMapping) ?? null

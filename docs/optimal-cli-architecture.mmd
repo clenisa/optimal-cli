@@ -1,0 +1,92 @@
+graph TB
+    CLI["optimal-cli v1.4.0<br/><i>CLI Entry Point</i>"]
+
+    subgraph TaskOps["Task Management"]
+        direction TB
+        BOARD["board<br/>view / list / create / update<br/>claim / comment / log / stats"]
+        PROJECT["project<br/>list / create / update"]
+        MILESTONE["milestone<br/>create / list"]
+        LABEL["label<br/>create / list"]
+    end
+
+    subgraph Discord["Discord Orchestration"]
+        direction TB
+        SYNC["sync discord:*<br/>init / push / pull / status / watch"]
+        SIGNALS["Signal Handlers<br/>Reactions + Text Commands<br/>!status / !assign / !priority / !note"]
+        WATCH["discord:watch<br/>systemd service<br/>role-based access"]
+    end
+
+    subgraph Bots["Multi-Agent Coordination"]
+        direction TB
+        BOT["bot<br/>heartbeat / agents / claim<br/>report / complete / release / blocked"]
+        COORD["coordinator<br/>start / status / assign / rebalance"]
+    end
+
+    subgraph Finance["ReturnPro Financial Analytics"]
+        direction TB
+        UPLOAD["Data Ingestion<br/>upload-r1 / upload-netsuite<br/>upload-income-statements"]
+        ANALYZE["Analysis<br/>audit-financials / export-kpis<br/>rate-anomalies / diagnose-months"]
+        BUDGET["Budget<br/>project-budget / export-budget<br/>scenario save / list / compare"]
+        TXNS["Transactions<br/>ingest-transactions<br/>stamp-transactions / delete-batch"]
+    end
+
+    subgraph Content["Content and Publishing"]
+        direction TB
+        NEWS["Newsletter<br/>generate-newsletter<br/>distribute-newsletter<br/>distribution-status"]
+        SOCIAL["Social<br/>generate-social-posts<br/>publish-social-posts / social-queue<br/>publish-instagram / scrape-ads"]
+        BLOG["Blog<br/>publish-blog / blog-drafts"]
+    end
+
+    subgraph Infra["Infrastructure"]
+        direction TB
+        DEPLOY["deploy"]
+        HEALTH["health-check / doctor"]
+        MIGRATE["migrate<br/>push / pending / create"]
+        CONFIG["config<br/>init / push / pull / show<br/>export / import / sync"]
+        ASSET["asset<br/>list / add / update / get<br/>remove / track / usage"]
+    end
+
+    CLI --> TaskOps
+    CLI --> Discord
+    CLI --> Bots
+    CLI --> Finance
+    CLI --> Content
+    CLI --> Infra
+
+    subgraph External["External Services"]
+        SB_OPT[("Supabase<br/>OptimalOS<br/>tasks, projects,<br/>discord mappings")]
+        SB_FIN[("Supabase<br/>ReturnPro<br/>financials, staging,<br/>transactions")]
+        DISC[("Discord<br/>Froggies Guild<br/>channels, threads,<br/>reactions")]
+        STRAPI[("Strapi CMS<br/>strapi.optimal.miami<br/>newsletters, posts,<br/>blogs")]
+        GROQ["Groq AI<br/>Llama 3.3 70B"]
+        VERCEL["Vercel<br/>Deployments"]
+        N8N["n8n<br/>Webhooks"]
+        META["Meta Graph API<br/>Instagram"]
+    end
+
+    TaskOps --> SB_OPT
+    Discord --> SB_OPT
+    Discord --> DISC
+    Bots --> SB_OPT
+    Finance --> SB_FIN
+    Content --> STRAPI
+    Content --> GROQ
+    Content --> N8N
+    Content --> META
+    Infra --> VERCEL
+    Infra --> SB_OPT
+
+    subgraph Cron["OpenClaw Cron Jobs"]
+        C1["optimal-cli-iteration<br/>every 30m - claim and work tasks"]
+        C2["Auto-backup<br/>every 4h - git push"]
+        C3["Auto-update<br/>6x/day - check OpenClaw version"]
+    end
+
+    Cron --> CLI
+    Cron --> DISC
+
+    subgraph Frontends["Read-Only Frontends"]
+        OSITE["optimal.miami<br/>Web Terminal<br/>xterm.js + Docker"]
+    end
+
+    OSITE -.->|"containers run<br/>optimal-cli"| CLI

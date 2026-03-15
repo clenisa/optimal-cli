@@ -1,4 +1,4 @@
-import type { MessageReaction, User, Message } from 'discord.js'
+import type { MessageReaction, User, Message, Guild } from 'discord.js'
 import { updateTask, claimTask, addComment, type TaskStatus, type UpdateTaskInput } from '../board/index.js'
 import { getMappingByThread } from './channels.js'
 
@@ -10,18 +10,29 @@ const REACTION_MAP: Record<string, TaskStatus> = {
   '👀': 'review',
 }
 
-let allowedUsers: Set<string> = new Set()
+let requiredRoleName: string | null = null
+let guildRef: Guild | null = null
 
-export function setAllowedUsers(userIds: string[]): void {
-  allowedUsers = new Set(userIds)
+export function setRequiredRole(guild: Guild, roleName: string): void {
+  guildRef = guild
+  requiredRoleName = roleName
+}
+
+async function hasAccess(userId: string, isBot: boolean): Promise<boolean> {
+  if (!guildRef || !requiredRoleName) return true // no restriction configured
+  try {
+    const member = await guildRef.members.fetch(userId)
+    return member.roles.cache.some(r => r.name === requiredRoleName)
+  } catch {
+    return false // member not in guild
+  }
 }
 
 export async function handleReaction(
   reaction: MessageReaction,
   user: User,
 ): Promise<boolean> {
-  if (user.bot) return false
-  if (allowedUsers.size > 0 && !allowedUsers.has(user.id)) return false
+  if (!(await hasAccess(user.id, user.bot))) return false
 
   const emoji = reaction.emoji.name
   if (!emoji || !(emoji in REACTION_MAP)) return false
@@ -53,11 +64,10 @@ export async function handleReaction(
 }
 
 export async function handleTextCommand(message: Message): Promise<boolean> {
-  if (message.author.bot) return false
-  if (allowedUsers.size > 0 && !allowedUsers.has(message.author.id)) return false
+  if (!(await hasAccess(message.author.id, message.author.bot))) return false
 
   const content = message.content.trim()
-  if (!content.startsWith('/')) return false
+  if (!content.startsWith('!')) return false
 
   const threadId = message.channel.id
   const mapping = await getMappingByThread(threadId)
@@ -69,7 +79,7 @@ export async function handleTextCommand(message: Message): Promise<boolean> {
   const arg = parts.slice(1).join(' ')
 
   switch (cmd) {
-    case '/status': {
+    case '!status': {
       const validStatuses: TaskStatus[] = ['backlog', 'ready', 'claimed', 'in_progress', 'review', 'done', 'blocked']
       const status = arg.toLowerCase().replace(' ', '_') as TaskStatus
       if (!validStatuses.includes(status)) {
@@ -87,9 +97,9 @@ export async function handleTextCommand(message: Message): Promise<boolean> {
       return true
     }
 
-    case '/assign': {
+    case '!assign': {
       if (!arg) {
-        await message.reply('Usage: /assign <agent>')
+        await message.reply('Usage: !assign <agent>')
         return true
       }
       await updateTask(mapping.task_id, { assigned_to: arg }, actor)
@@ -97,10 +107,10 @@ export async function handleTextCommand(message: Message): Promise<boolean> {
       return true
     }
 
-    case '/priority': {
+    case '!priority': {
       const p = parseInt(arg)
       if (isNaN(p) || p < 1 || p > 4) {
-        await message.reply('Usage: /priority 1-4')
+        await message.reply('Usage: !priority 1-4')
         return true
       }
       await updateTask(mapping.task_id, { priority: p as 1 | 2 | 3 | 4 }, actor)
@@ -108,9 +118,9 @@ export async function handleTextCommand(message: Message): Promise<boolean> {
       return true
     }
 
-    case '/note': {
+    case '!note': {
       if (!arg) {
-        await message.reply('Usage: /note <text>')
+        await message.reply('Usage: !note <text>')
         return true
       }
       await addComment({
