@@ -66,8 +66,7 @@ async function uploadFile(
     }
     case 'r1-checkin': {
       if (!monthResult.month) throw new Error(`Cannot detect month for ${file.fileName}. Use --month YYYY-MM.`)
-      // TODO: add { volumeType: 'checked_in' } param after Task 6 extends upload-r1.ts
-      const result = await processR1Upload(file.path, userId, monthResult.month)
+      const result = await processR1Upload(file.path, userId, monthResult.month, { volumeType: 'checked_in' })
       return {
         inserted: result.rowsInserted,
         months: [monthResult.month],
@@ -76,8 +75,7 @@ async function uploadFile(
     }
     case 'r1-order-closed': {
       if (!monthResult.month) throw new Error(`Cannot detect month for ${file.fileName}. Use --month YYYY-MM.`)
-      // TODO: add { volumeType: 'sold' } param after Task 6 extends upload-r1.ts
-      const result = await processR1Upload(file.path, userId, monthResult.month)
+      const result = await processR1Upload(file.path, userId, monthResult.month, { volumeType: 'sold' })
       return {
         inserted: result.rowsInserted,
         months: [monthResult.month],
@@ -86,8 +84,7 @@ async function uploadFile(
     }
     case 'r1-ops-complete': {
       if (!monthResult.month) throw new Error(`Cannot detect month for ${file.fileName}. Use --month YYYY-MM.`)
-      // TODO: add { volumeType: 'processed' } param after Task 6 extends upload-r1.ts
-      const result = await processR1Upload(file.path, userId, monthResult.month)
+      const result = await processR1Upload(file.path, userId, monthResult.month, { volumeType: 'processed' })
       return {
         inserted: result.rowsInserted,
         months: [monthResult.month],
