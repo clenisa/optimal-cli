@@ -92,8 +92,13 @@ async function uploadFile(
       }
     }
     case 'dims': {
-      // TODO: implement after upload-dims.ts is created in Task 7
-      return { inserted: 0, months: [], warnings: ['dims upload not yet implemented'] }
+      const { parseDimsExport } = await import('./upload-dims.js')
+      const result = await parseDimsExport(file.path)
+      return {
+        inserted: result.upserted,
+        months: [],
+        warnings: result.warnings,
+      }
     }
     default:
       throw new Error(`Unknown file type: ${file.type}`)
