@@ -83,18 +83,23 @@ interface StgInsertRow {
 }
 
 // ---------------------------------------------------------------------------
-// Constants
+// Volume type config
 // ---------------------------------------------------------------------------
 
 /**
- * Account code / ID for Checked-In Qty, which is the primary volume type
- * produced by a standard R1 upload. This matches the dashboard's volume-configs.ts.
- *
- * account_code: "Checked-In Qty"
- * account_id:   130
+ * Supported R1 volume types. Each maps to a specific account_code and account_id
+ * in the ReturnPro chart of accounts.
  */
-const CHECKED_IN_ACCOUNT_CODE = 'Checked-In Qty'
-const CHECKED_IN_ACCOUNT_ID = 130
+export type R1VolumeType = 'checked_in' | 'sold' | 'processed'
+
+const VOLUME_CONFIGS: Record<R1VolumeType, {
+  accountId: number
+  accountCode: string
+}> = {
+  checked_in: { accountId: 130, accountCode: 'Checked-In Qty' },
+  sold: { accountId: 140, accountCode: 'Sold Qty' },
+  processed: { accountId: 119, accountCode: 'Processed Qty' },
+}
 
 const CHUNK_SIZE = 500
 const PAGE_SIZE = 1000
@@ -422,11 +427,14 @@ async function insertBatch(
  * @param userId     The user_id to stamp on each inserted row.
  * @param monthYear  Target month in "YYYY-MM" format (e.g. "2025-10").
  *                   Stored as the `date` column as "YYYY-MM-01".
+ * @param opts       Optional config. `volumeType` selects which account to
+ *                   use (defaults to `'checked_in'` for backward compat).
  */
 export async function processR1Upload(
   filePath: string,
   userId: string,
   monthYear: string,
+  opts?: { volumeType?: R1VolumeType },
 ): Promise<R1UploadResult> {
   if (!fs.existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`)
@@ -441,6 +449,10 @@ export async function processR1Upload(
   const dateStr = `${monthYear}-01`
   const loadedAt = new Date().toISOString()
   const warnings: string[] = []
+
+  // Resolve volume type config (defaults to checked_in for backward compat)
+  const volumeType = opts?.volumeType ?? 'checked_in'
+  const volumeConfig = VOLUME_CONFIGS[volumeType]
 
   // -------------------------------------------------------------------------
   // 1. Parse XLSX
@@ -510,8 +522,8 @@ export async function processR1Upload(
       program_code: group.programCode,
       program_id_key: programIdKeyMap.get(group.programCode) ?? null,
       date: dateStr,
-      account_code: CHECKED_IN_ACCOUNT_CODE,
-      account_id: CHECKED_IN_ACCOUNT_ID,
+      account_code: volumeConfig.accountCode,
+      account_id: volumeConfig.accountId,
       // amount is TEXT in stg_financials_raw — store as string
       amount: String(trgidCount),
       mode: 'actual',
