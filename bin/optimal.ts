@@ -38,6 +38,17 @@ import { publishBlog, createBlogPost, listBlogDrafts } from '../lib/cms/publish-
 import { migrateDb, listPendingMigrations, createMigration } from '../lib/infra/migrate.js'
 import { saveScenario, loadScenario, listScenarios, compareScenarios, deleteScenario } from '../lib/budget/scenarios.js'
 import { deleteBatch, previewBatch } from '../lib/transactions/delete-batch.js'
+import { basename } from 'node:path'
+import { scanInbox, ensureInboxExists, detectTypeFromPath, type InboxFile } from '../lib/returnpro/inbox.js'
+import { runPipeline, fireN8nPipeline, pollPipeline, checkConcurrency } from '../lib/returnpro/pipeline.js'
+import {
+  newPipelineId,
+  getRunsByPipeline,
+  getLatestPipelines,
+  createRun,
+  updateRun,
+  type PipelineRun,
+} from '../lib/returnpro/pipeline-runs.js'
 
 const program = new Command()
   .name('optimal')
@@ -929,6 +940,380 @@ scenario
       console.log(`Deleted scenario: ${opts.name}`)
     } catch (err) {
       console.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+// ── ReturnPro Pipeline Commands ─────────────────────────────────────────
+
+const returnpro = program.command('returnpro').description('ReturnPro data pipeline orchestration')
+
+// returnpro inbox — list pending files
+returnpro
+  .command('inbox')
+  .description('List files waiting in ~/returnpro-inbox/')
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { json: boolean }) => {
+    ensureInboxExists()
+    const files = scanInbox()
+
+    if (opts.json) {
+      console.log(JSON.stringify(files, null, 2))
+      return
+    }
+
+    if (files.length === 0) {
+      console.log('Inbox is empty.')
+      return
+    }
+
+    console.log('Pending files:')
+    const grouped = new Map<string, InboxFile[]>()
+    for (const f of files) {
+      const list = grouped.get(f.subfolder) ?? []
+      list.push(f)
+      grouped.set(f.subfolder, list)
+    }
+    for (const [folder, list] of grouped) {
+      console.log(`  ${folder}/`)
+      for (const f of list) console.log(`    ${f.fileName}`)
+    }
+    console.log(`\nTotal: ${files.length} files`)
+  })
+
+// returnpro pipeline — full pipeline run
+returnpro
+  .command('pipeline')
+  .description('Run full pipeline: scan inbox, upload all, trigger n8n, poll status')
+  .option('--yes', 'Skip confirmation', false)
+  .option('--json', 'Output as JSON', false)
+  .option('--month <YYYY-MM>', 'Override month for R1 files')
+  .action(async (opts: { yes: boolean; json: boolean; month?: string }) => {
+    ensureInboxExists()
+    const files = scanInbox()
+
+    if (files.length === 0) {
+      console.log('No files found in inbox. Nothing to do.')
+      return
+    }
+
+    // Concurrency check
+    const running = await checkConcurrency()
+    if (running.length > 0) {
+      console.error(`Warning: ${running.length} steps currently running from recent pipeline.`)
+      if (opts.yes) {
+        console.error('Aborting (--yes mode does not override concurrency guard).')
+        process.exit(1)
+      }
+      // In interactive mode, the user would be prompted here (readline)
+    }
+
+    // Show what we found
+    if (!opts.json) {
+      console.log('Found files:')
+      for (const f of files) console.log(`  ${f.subfolder}/${f.fileName}`)
+      console.log()
+    }
+
+    const userId = process.env.RETURNPRO_USER_ID
+    if (!userId) {
+      console.error('Missing env var: RETURNPRO_USER_ID (set to your Supabase user UUID)')
+      process.exit(1)
+    }
+
+    // Run uploads
+    const result = await runPipeline(files, { userId, monthOverride: opts.month })
+
+    if (!opts.json) {
+      console.log(`\nUploads complete: ${result.stepsCompleted.length} succeeded, ${result.stepsFailed.length} failed`)
+      if (result.months.length > 0) console.log(`Months covered: ${result.months.join(', ')}`)
+    }
+
+    // Fire n8n
+    if (result.stepsCompleted.length > 0) {
+      const n8n = await fireN8nPipeline(result.pipelineId, result.stepsCompleted, result.months)
+      if (!n8n.success) {
+        console.error(`n8n webhook failed: ${n8n.error}`)
+        if (opts.json) {
+          console.log(JSON.stringify({ ...result, n8n_error: n8n.error }))
+        }
+        return
+      }
+
+      if (!opts.json) console.log('n8n pipeline triggered. Polling for status...\n')
+
+      // Poll and render progress
+      const finalRuns = await pollPipeline(result.pipelineId, (runs) => {
+        if (opts.json) return
+        // Clear and re-render
+        console.clear()
+        console.log(`Pipeline ${result.pipelineId.slice(0, 8)} ▸ ${new Date().toISOString().slice(0, 19)}`)
+        console.log('Step                      Status     Rows     Duration')
+        for (const r of runs) {
+          const status = r.status === 'success' ? '✓ done'
+            : r.status === 'running' ? '⟳ running'
+            : r.status === 'failed' ? '✗ failed'
+            : r.status === 'skipped' ? '— skipped'
+            : '◦ pending'
+          const rows = r.result_summary?.inserted ?? '—'
+          const dur = r.started_at && r.completed_at
+            ? `${((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000).toFixed(1)}s`
+            : r.status === 'running' ? '...' : '—'
+          console.log(`${r.step.padEnd(26)}${status.padEnd(11)}${String(rows).padEnd(9)}${dur}`)
+        }
+      })
+
+      if (opts.json) {
+        console.log(JSON.stringify({ pipelineId: result.pipelineId, runs: finalRuns }, null, 2))
+      }
+    } else if (opts.json) {
+      console.log(JSON.stringify(result, null, 2))
+    }
+  })
+
+// returnpro status — show pipeline status
+returnpro
+  .command('status')
+  .description('Show latest pipeline run status')
+  .option('--id <pipeline_id>', 'Specific pipeline ID')
+  .option('--last <n>', 'Show last N pipelines', '1')
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { id?: string; last: string; json: boolean }) => {
+    let runs: PipelineRun[]
+
+    if (opts.id) {
+      runs = await getRunsByPipeline(opts.id)
+    } else {
+      runs = await getLatestPipelines(parseInt(opts.last, 10))
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(runs, null, 2))
+      return
+    }
+
+    if (runs.length === 0) {
+      console.log('No pipeline runs found.')
+      return
+    }
+
+    // Group by pipeline_id
+    const grouped = new Map<string, PipelineRun[]>()
+    for (const r of runs) {
+      const list = grouped.get(r.pipeline_id) ?? []
+      list.push(r)
+      grouped.set(r.pipeline_id, list)
+    }
+
+    for (const [pid, steps] of grouped) {
+      const first = steps[0]
+      console.log(`\nPipeline ${pid.slice(0, 8)} ▸ ${first.created_at.slice(0, 19)}`)
+      console.log('Step                      Status     Rows     Duration')
+      for (const r of steps) {
+        const status = r.status === 'success' ? '✓ done'
+          : r.status === 'running' ? '⟳ running'
+          : r.status === 'failed' ? '✗ failed'
+          : r.status === 'skipped' ? '— skipped'
+          : '◦ pending'
+        const rows = r.result_summary?.inserted ?? '—'
+        const dur = r.started_at && r.completed_at
+          ? `${((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000).toFixed(1)}s`
+          : '—'
+        console.log(`${r.step.padEnd(26)}${status.padEnd(11)}${String(rows).padEnd(9)}${dur}`)
+      }
+    }
+  })
+
+// returnpro upload — upload a single file
+returnpro
+  .command('upload')
+  .description('Upload a single file (auto-detects type from inbox subfolder)')
+  .requiredOption('--file <path>', 'File path')
+  .option('--type <type>', 'Explicit type: dims, s7, is, r1-checkin, r1-order-closed, r1-ops-complete')
+  .option('--month <YYYY-MM>', 'Override month for R1 files')
+  .option('--yes', 'Skip confirmation', false)
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { file: string; type?: string; month?: string; yes: boolean; json: boolean }) => {
+    if (!existsSync(opts.file)) {
+      console.error(`File not found: ${opts.file}`)
+      process.exit(1)
+    }
+
+    // Detect type from subfolder location or explicit --type flag
+    let fileType = opts.type ?? detectTypeFromPath(opts.file)
+    if (!fileType) {
+      console.error('Cannot detect file type. Use --type flag.')
+      process.exit(1)
+    }
+
+    const file: InboxFile = {
+      path: opts.file,
+      fileName: basename(opts.file),
+      type: fileType as any,
+      subfolder: fileType,
+    }
+
+    const userId = process.env.RETURNPRO_USER_ID
+    if (!userId) {
+      console.error('Missing env var: RETURNPRO_USER_ID (set to your Supabase user UUID)')
+      process.exit(1)
+    }
+    const result = await runPipeline([file], { userId, monthOverride: opts.month })
+
+    // Fire n8n for downstream analysis
+    if (result.stepsCompleted.length > 0) {
+      const n8n = await fireN8nPipeline(result.pipelineId, result.stepsCompleted, result.months)
+      if (!n8n.success && !opts.json) {
+        console.error(`n8n webhook failed: ${n8n.error}`)
+      }
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2))
+    } else {
+      console.log(`Upload: ${result.stepsCompleted.length} succeeded, ${result.stepsFailed.length} failed`)
+      console.log(`Pipeline ID: ${result.pipelineId}`)
+      if (result.months.length > 0) console.log(`Months: ${result.months.join(', ')}`)
+    }
+  })
+
+// returnpro audit — trigger audit via n8n
+returnpro
+  .command('audit')
+  .description('Trigger audit step via n8n webhook')
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { json: boolean }) => {
+    const baseUrl = process.env.N8N_WEBHOOK_URL
+    if (!baseUrl) {
+      console.error('Missing env var: N8N_WEBHOOK_URL')
+      process.exit(1)
+    }
+
+    const pipelineId = newPipelineId()
+    const run = await createRun(pipelineId, 'audit', { status: 'pending' })
+
+    const url = `${baseUrl.replace(/\/+$/, '')}/webhook/returnpro-audit`
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pipeline_id: pipelineId }),
+      })
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        console.error(`n8n returned ${res.status}: ${body}`)
+        process.exit(1)
+      }
+
+      if (!opts.json) console.log(`Audit triggered. Pipeline: ${pipelineId.slice(0, 8)}`)
+
+      // Poll
+      const finalRuns = await pollPipeline(pipelineId, (runs) => {
+        if (!opts.json) {
+          const audit = runs.find(r => r.step === 'audit')
+          if (audit) console.log(`  audit: ${audit.status}`)
+        }
+      })
+
+      if (opts.json) console.log(JSON.stringify(finalRuns, null, 2))
+    } catch (err) {
+      console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+// returnpro logs — query pipeline_runs
+returnpro
+  .command('logs')
+  .description('Query pipeline_runs as structured data')
+  .option('--step <name>', 'Filter by step name')
+  .option('--last <n>', 'Last N entries', '20')
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { step?: string; last: string; json: boolean }) => {
+    const runs = await getLatestPipelines(parseInt(opts.last, 10))
+    const filtered = opts.step ? runs.filter(r => r.step === opts.step) : runs
+
+    if (opts.json) {
+      console.log(JSON.stringify(filtered, null, 2))
+    } else {
+      for (const r of filtered.slice(0, parseInt(opts.last, 10))) {
+        const dur = r.started_at && r.completed_at
+          ? `${((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000).toFixed(1)}s`
+          : '—'
+        console.log(`${r.pipeline_id.slice(0, 8)} ${r.step.padEnd(24)} ${r.status.padEnd(8)} ${dur.padEnd(8)} ${r.created_at.slice(0, 19)}`)
+      }
+    }
+  })
+
+// returnpro inspect — full dump of a pipeline
+returnpro
+  .command('inspect')
+  .description('Full dump of a specific pipeline run')
+  .requiredOption('--id <pipeline_id>', 'Pipeline ID')
+  .option('--json', 'Output as JSON (default)', true)
+  .action(async (opts: { id: string; json: boolean }) => {
+    const runs = await getRunsByPipeline(opts.id)
+    if (runs.length === 0) {
+      console.error(`No runs found for pipeline ${opts.id}`)
+      process.exit(1)
+    }
+    console.log(JSON.stringify(runs, null, 2))
+  })
+
+// returnpro retry — re-fire a failed n8n step
+returnpro
+  .command('retry')
+  .description('Re-fire a single failed n8n step')
+  .requiredOption('--id <pipeline_id>', 'Pipeline ID')
+  .requiredOption('--step <name>', 'Step to retry')
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { id: string; step: string; json: boolean }) => {
+    const baseUrl = process.env.N8N_WEBHOOK_URL
+    if (!baseUrl) {
+      console.error('Missing env var: N8N_WEBHOOK_URL')
+      process.exit(1)
+    }
+
+    // Find the failed run
+    const runs = await getRunsByPipeline(opts.id)
+    const target = runs.find(r => r.step === opts.step)
+    if (!target) {
+      console.error(`Step "${opts.step}" not found in pipeline ${opts.id}`)
+      process.exit(1)
+    }
+
+    // Reset status
+    await updateRun(target.id, { status: 'pending' })
+
+    // Fire the webhook for this specific step
+    const url = `${baseUrl.replace(/\/+$/, '')}/webhook/returnpro-${opts.step.replace(/_/g, '-')}`
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pipeline_id: opts.id }),
+      })
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        console.error(`n8n returned ${res.status}: ${body}`)
+        process.exit(1)
+      }
+
+      if (!opts.json) console.log(`Retry triggered for ${opts.step} in pipeline ${opts.id.slice(0, 8)}`)
+
+      // Poll
+      const finalRuns = await pollPipeline(opts.id, (allRuns) => {
+        if (!opts.json) {
+          const step = allRuns.find(r => r.step === opts.step)
+          if (step) console.log(`  ${step.step}: ${step.status}`)
+        }
+      })
+
+      if (opts.json) console.log(JSON.stringify(finalRuns, null, 2))
+    } catch (err) {
+      console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
       process.exit(1)
     }
   })
