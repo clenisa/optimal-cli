@@ -1,5 +1,7 @@
 import ExcelJS from 'exceljs'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync, unlinkSync } from 'node:fs'
+import { extname, dirname, basename, join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { getSupabase } from '../supabase.js'
 
 export interface DimsExportResult {
@@ -9,39 +11,60 @@ export interface DimsExportResult {
   warnings: string[]
 }
 
+/** Convert legacy .xls to .xlsx via LibreOffice. Returns path to converted file. */
+function convertXlsToXlsx(filePath: string): string {
+  const dir = dirname(filePath)
+  const name = basename(filePath, extname(filePath))
+  const outPath = join(dir, `${name}.xlsx`)
+
+  execFileSync('libreoffice', [
+    '--headless', '--convert-to', 'xlsx', '--outdir', dir, filePath,
+  ], { timeout: 30_000 })
+
+  if (!existsSync(outPath)) throw new Error(`LibreOffice conversion failed: ${outPath} not created`)
+  return outPath
+}
+
 export async function parseDimsExport(filePath: string): Promise<DimsExportResult> {
   const sb = getSupabase('returnpro')
+
+  // Handle legacy .xls format by converting to .xlsx first
+  let actualPath = filePath
+  let tempConverted = false
+  if (extname(filePath).toLowerCase() === '.xls') {
+    actualPath = convertXlsToXlsx(filePath)
+    tempConverted = true
+  }
+
   const workbook = new ExcelJS.Workbook()
-  const buffer = readFileSync(filePath)
-  await workbook.xlsx.load(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+  const buffer = readFileSync(actualPath)
+  try {
+    await workbook.xlsx.load(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+  } finally {
+    if (tempConverted) unlinkSync(actualPath) // clean up converted temp file
+  }
 
   const sheet = workbook.worksheets[0]
   if (!sheet) throw new Error('No worksheet found in dims export')
 
-  // Find header row — look for "Program" or "ProgramName" column
-  let headerRow = 0
-  let programCol = 0
-  let masterCol = 0
+  // Format: Col A = Master Program Name, Col B = comma-separated Program IDs
+  // Row 1 = headers ("Name", "filter by \"ProgramID\""), Row 2+ = data
+  const masterCol = 1 // A
+  const programCol = 2 // B
+  const headerRow = 1
 
-  sheet.eachRow((row, rowNum) => {
-    if (headerRow > 0) return
-    row.eachCell((cell, colNum) => {
-      const val = String(cell.value ?? '').toLowerCase().trim()
-      if (val.includes('program') && !val.includes('master')) programCol = colNum
-      if (val.includes('master')) masterCol = colNum
-    })
-    if (programCol > 0 && masterCol > 0) headerRow = rowNum
-  })
-
-  if (headerRow === 0) throw new Error('Could not find Program/Master Program columns in header')
-
-  // Extract mappings
+  // Extract mappings — split comma-separated program codes in col B
   const mappings: Array<{ programCode: string; masterProgram: string }> = []
   sheet.eachRow((row, rowNum) => {
     if (rowNum <= headerRow) return
-    const prog = String(row.getCell(programCol).value ?? '').trim()
     const master = String(row.getCell(masterCol).value ?? '').trim()
-    if (prog && master) mappings.push({ programCode: prog, masterProgram: master })
+    const progRaw = String(row.getCell(programCol).value ?? '').trim()
+    if (!master || !progRaw) return
+    // Col B contains comma-separated program codes
+    const codes = progRaw.split(',').map(c => c.trim()).filter(Boolean)
+    for (const code of codes) {
+      mappings.push({ programCode: code, masterProgram: master })
+    }
   })
 
   if (mappings.length === 0) {
