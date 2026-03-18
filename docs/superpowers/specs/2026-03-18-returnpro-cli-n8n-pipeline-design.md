@@ -398,7 +398,7 @@ Failed files in `~/returnpro-inbox/failed/` always have a `.error.json` companio
 ### New Variables (add to ~/.env)
 
 ```bash
-N8N_WEBHOOK_URL=https://n8n.op-hub.com    # Base URL for n8n webhook triggers
+N8N_WEBHOOK_URL=https://n8n.optimal.miami    # Base URL for n8n webhook triggers
 RETURNPRO_INBOX_PATH=~/returnpro-inbox     # Override inbox location (default: ~/returnpro-inbox)
 RETURNPRO_DASHBOARD_URL=https://dashboard-returnpro.vercel.app  # Dashboard API base URL (used by n8n for read-only API calls)
 RETURNPRO_USER_ID=<carlos-uuid>            # Default user ID for uploads

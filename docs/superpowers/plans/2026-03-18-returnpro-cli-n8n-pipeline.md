@@ -1405,7 +1405,7 @@ This workflow is built in n8n's visual editor, then exported as JSON. The plan d
 
 - [ ] **Step 1: Create the workflow in n8n**
 
-Open `https://n8n.op-hub.com` and create a new workflow named "ReturnPro: Audit".
+Open `https://n8n.optimal.miami` and create a new workflow named "ReturnPro: Audit".
 
 **Nodes:**
 1. **Webhook** trigger: path=`returnpro-audit`, method=POST, response mode=`lastNode`
@@ -1615,7 +1615,7 @@ mkdir -p ~/returnpro-inbox/{dims,solution7,income-statements,r1/check-in,r1/orde
 
 Append to `~/.env`:
 ```bash
-N8N_WEBHOOK_URL=https://n8n.op-hub.com
+N8N_WEBHOOK_URL=https://n8n.optimal.miami
 RETURNPRO_INBOX_PATH=~/returnpro-inbox
 RETURNPRO_DASHBOARD_URL=https://dashboard-returnpro.vercel.app
 RETURNPRO_USER_ID=<carlos-uuid>

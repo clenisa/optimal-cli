@@ -42,7 +42,7 @@
       "position": [680, 260],
       "parameters": {
         "method": "POST",
-        "url": "https://n8n.op-hub.com/webhook/returnpro-dims-check",
+        "url": "https://n8n.optimal.miami/webhook/returnpro-dims-check",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -87,7 +87,7 @@
       "position": [1120, 400],
       "parameters": {
         "method": "POST",
-        "url": "https://n8n.op-hub.com/webhook/returnpro-audit",
+        "url": "https://n8n.optimal.miami/webhook/returnpro-audit",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -132,7 +132,7 @@
       "position": [1560, 400],
       "parameters": {
         "method": "POST",
-        "url": "https://n8n.op-hub.com/webhook/returnpro-anomaly-scan",
+        "url": "https://n8n.optimal.miami/webhook/returnpro-anomaly-scan",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -177,7 +177,7 @@
       "position": [2000, 400],
       "parameters": {
         "method": "POST",
-        "url": "https://n8n.op-hub.com/webhook/returnpro-notify",
+        "url": "https://n8n.optimal.miami/webhook/returnpro-notify",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
