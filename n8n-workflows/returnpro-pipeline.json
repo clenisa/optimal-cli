@@ -1,0 +1,258 @@
+{
+  "name": "ReturnPro — Pipeline (Master Orchestrator)",
+  "nodes": [
+    {
+      "id": "pipeline-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "parameters": {
+        "path": "returnpro-pipeline",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-check-dims",
+      "name": "IF sync_dims in steps",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 400],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.stringify($json.body.steps || []) }}",
+              "rightValue": "sync_dims",
+              "operator": { "type": "string", "operation": "contains" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "pipeline-post-dims-check",
+      "name": "POST dims-check webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 260],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.op-hub.com/webhook/returnpro-dims-check",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-create-audit-row",
+      "name": "Create audit pipeline_run row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RETURNPRO_SUPABASE_URL }}/rest/v1/pipeline_runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\",\n  \"step\": \"audit\",\n  \"status\": \"pending\",\n  \"created_at\": \"{{ $now.toISO() }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-post-audit",
+      "name": "POST audit webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.op-hub.com/webhook/returnpro-audit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-create-anomaly-row",
+      "name": "Create anomaly pipeline_run row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RETURNPRO_SUPABASE_URL }}/rest/v1/pipeline_runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\",\n  \"step\": \"anomaly_scan\",\n  \"status\": \"pending\",\n  \"created_at\": \"{{ $now.toISO() }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-post-anomaly",
+      "name": "POST anomaly-scan webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1560, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.op-hub.com/webhook/returnpro-anomaly-scan",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-create-notify-row",
+      "name": "Create notify pipeline_run row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1780, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RETURNPRO_SUPABASE_URL }}/rest/v1/pipeline_runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\",\n  \"step\": \"notify\",\n  \"status\": \"pending\",\n  \"created_at\": \"{{ $now.toISO() }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-post-notify",
+      "name": "POST notify webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.op-hub.com/webhook/returnpro-notify",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2220, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"pipeline_id\": \"{{ $('Webhook').item.json.body.pipeline_id }}\",\n  \"steps_triggered\": {{ JSON.stringify($('Webhook').item.json.body.steps || ['dims_check', 'audit', 'anomaly_scan', 'notify']) }},\n  \"notify_result\": {{ JSON.stringify($('POST notify webhook').item.json) }}\n}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "IF sync_dims in steps", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF sync_dims in steps": {
+      "main": [
+        [{ "node": "POST dims-check webhook", "type": "main", "index": 0 }],
+        [{ "node": "Create audit pipeline_run row", "type": "main", "index": 0 }]
+      ]
+    },
+    "POST dims-check webhook": {
+      "main": [
+        [{ "node": "Create audit pipeline_run row", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create audit pipeline_run row": {
+      "main": [
+        [{ "node": "POST audit webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "POST audit webhook": {
+      "main": [
+        [{ "node": "Create anomaly pipeline_run row", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create anomaly pipeline_run row": {
+      "main": [
+        [{ "node": "POST anomaly-scan webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "POST anomaly-scan webhook": {
+      "main": [
+        [{ "node": "Create notify pipeline_run row", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create notify pipeline_run row": {
+      "main": [
+        [{ "node": "POST notify webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "POST notify webhook": {
+      "main": [
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

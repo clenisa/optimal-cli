@@ -1,0 +1,143 @@
+{
+  "name": "ReturnPro — Watch Inbox (DISABLED)",
+  "nodes": [
+    {
+      "id": "watch-trigger",
+      "name": "Watch Folder",
+      "type": "n8n-nodes-base.localFileTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": {
+        "path": "/home/optimal/returnpro-inbox/",
+        "events": ["add"],
+        "options": {
+          "includeSubdirectories": false
+        }
+      }
+    },
+    {
+      "id": "watch-detect-type",
+      "name": "Detect file type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const filePath = $input.item.json.path || '';\nconst fileName = filePath.split('/').pop() || '';\nconst ext = fileName.split('.').pop()?.toLowerCase() || '';\n\nlet fileType = 'unknown';\nlet uploadArg = '';\n\nif (['xlsx', 'xlsm'].includes(ext)) {\n  if (fileName.toLowerCase().includes('income') || fileName.toLowerCase().includes('is_')) {\n    fileType = 'income_statement';\n    uploadArg = `income-statement --file \"${filePath}\"`;\n  } else {\n    fileType = 'staging';\n    uploadArg = `staging --file \"${filePath}\"`;\n  }\n} else if (ext === 'csv') {\n  fileType = 'csv_staging';\n  uploadArg = `staging --file \"${filePath}\" --format csv`;\n} else {\n  fileType = 'unknown';\n  uploadArg = '';\n}\n\nreturn [{ json: { file_path: filePath, file_name: fileName, ext, file_type: fileType, upload_arg: uploadArg } }];"
+      }
+    },
+    {
+      "id": "watch-if-known",
+      "name": "IF known file type",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.file_type }}",
+              "rightValue": "unknown",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "watch-execute-upload",
+      "name": "Execute optimal upload",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [900, 200],
+      "parameters": {
+        "command": "=cd /home/optimal && optimal returnpro upload {{ $('Detect file type').item.json.upload_arg }}"
+      }
+    },
+    {
+      "id": "watch-if-success",
+      "name": "IF upload succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 200],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.exitCode }}",
+              "rightValue": "0",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "watch-post-pipeline",
+      "name": "POST pipeline webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 120],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.op-hub.com/webhook/returnpro-pipeline",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pipeline_id\": \"auto-{{ $now.toMillis() }}\",\n  \"steps\": [\"sync_dims\", \"audit\", \"anomaly_scan\", \"notify\"],\n  \"triggered_by\": \"watch_inbox\",\n  \"source_file\": \"{{ $('Detect file type').item.json.file_name }}\",\n  \"file_type\": \"{{ $('Detect file type').item.json.file_type }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "watch-skip",
+      "name": "Skip unknown file",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 420],
+      "parameters": {
+        "jsCode": "const item = $('Detect file type').item.json;\nreturn [{ json: { skipped: true, reason: `Unknown file type: ${item.ext}`, file: item.file_name } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Watch Folder": {
+      "main": [
+        [{ "node": "Detect file type", "type": "main", "index": 0 }]
+      ]
+    },
+    "Detect file type": {
+      "main": [
+        [{ "node": "IF known file type", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF known file type": {
+      "main": [
+        [{ "node": "Execute optimal upload", "type": "main", "index": 0 }],
+        [{ "node": "Skip unknown file", "type": "main", "index": 0 }]
+      ]
+    },
+    "Execute optimal upload": {
+      "main": [
+        [{ "node": "IF upload succeeded", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF upload succeeded": {
+      "main": [
+        [{ "node": "POST pipeline webhook", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

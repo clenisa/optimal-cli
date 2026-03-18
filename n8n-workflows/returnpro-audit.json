@@ -1,0 +1,157 @@
+{
+  "name": "ReturnPro — Audit",
+  "nodes": [
+    {
+      "id": "audit-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "path": "returnpro-audit",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "audit-set-running",
+      "name": "Set pipeline_run running",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.RETURNPRO_SUPABASE_URL }}/rest/v1/pipeline_runs?pipeline_id=eq.{{ $json.body.pipeline_id }}&step=eq.audit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"running\",\n  \"started_at\": \"{{ $now.toISO() }}\"\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "audit-refresh",
+      "name": "POST audit refresh",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RETURNPRO_DASHBOARD_URL }}/api/data-audit/refresh",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {}
+      }
+    },
+    {
+      "id": "audit-summary",
+      "name": "GET audit summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.RETURNPRO_DASHBOARD_URL }}/api/staging/audit-summary",
+        "options": {}
+      }
+    },
+    {
+      "id": "audit-extract",
+      "name": "Extract accuracy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "const body = $input.item.json;\nconst months = body.months || [];\nconst overall = body.overall || {};\n\nconst result = {\n  pipeline_id: $('Webhook').item.json.body.pipeline_id,\n  overall_accuracy: overall.accuracy_pct ?? null,\n  total_matched: overall.matched ?? 0,\n  total_mismatched: overall.mismatched ?? 0,\n  months_below_100: months.filter(m => (m.accuracy_pct ?? 100) < 100).map(m => ({\n    month: m.month,\n    accuracy_pct: m.accuracy_pct,\n    mismatches: m.mismatched\n  }))\n};\n\nreturn [{ json: result }];"
+      }
+    },
+    {
+      "id": "audit-set-success",
+      "name": "Set pipeline_run success",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 300],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.RETURNPRO_SUPABASE_URL }}/rest/v1/pipeline_runs?pipeline_id=eq.{{ $('Extract accuracy').item.json.pipeline_id }}&step=eq.audit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.RETURNPRO_SUPABASE_SERVICE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"success\",\n  \"finished_at\": \"{{ $now.toISO() }}\",\n  \"result\": {{ JSON.stringify($('Extract accuracy').item.json) }}\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "audit-respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"step\": \"audit\",\n  \"pipeline_id\": \"{{ $('Extract accuracy').item.json.pipeline_id }}\",\n  \"overall_accuracy\": {{ $('Extract accuracy').item.json.overall_accuracy }},\n  \"months_below_100\": {{ JSON.stringify($('Extract accuracy').item.json.months_below_100) }}\n}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "Set pipeline_run running", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set pipeline_run running": {
+      "main": [
+        [{ "node": "POST audit refresh", "type": "main", "index": 0 }]
+      ]
+    },
+    "POST audit refresh": {
+      "main": [
+        [{ "node": "GET audit summary", "type": "main", "index": 0 }]
+      ]
+    },
+    "GET audit summary": {
+      "main": [
+        [{ "node": "Extract accuracy", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract accuracy": {
+      "main": [
+        [{ "node": "Set pipeline_run success", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set pipeline_run success": {
+      "main": [
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
