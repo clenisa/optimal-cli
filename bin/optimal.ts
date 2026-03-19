@@ -6,7 +6,9 @@ import {
   createTask,
   updateTask,
   logActivity,
+  listProjects,
   type CliTask,
+  type Project,
 } from '../lib/kanban.js'
 import { runAuditComparison } from '../lib/returnpro/audit.js'
 import { exportKpis, formatKpiTable, formatKpiCsv } from '../lib/returnpro/kpis.js'
@@ -75,13 +77,13 @@ board
     }
 
     const order = ['in_progress', 'blocked', 'ready', 'backlog', 'review', 'done']
-    console.log('| Status | P | Title | Agent | Skill |')
-    console.log('|--------|---|-------|-------|-------|')
+    console.log('| Status | P | Title | Assigned | Skill |')
+    console.log('|--------|---|-------|----------|-------|')
     for (const status of order) {
       const list = grouped.get(status) ?? []
       for (const t of list) {
         console.log(
-          `| ${t.status} | ${t.priority} | ${t.title} | ${t.assigned_agent ?? '—'} | ${t.skill_ref ?? '—'} |`
+          `| ${t.status} | ${t.priority} | ${t.title} | ${t.assigned_to ?? '—'} | ${t.skill_required ?? '—'} |`
         )
       }
     }
@@ -103,8 +105,7 @@ board
       title: opts.title,
       description: opts.description,
       priority: parseInt(opts.priority) as 1 | 2 | 3 | 4,
-      skill_ref: opts.skill,
-      labels: opts.labels?.split(',').map((l: string) => l.trim()),
+      skill_required: opts.skill,
     })
     console.log(`Created task: ${task.id} — "${task.title}" (priority ${task.priority}, status ${task.status})`)
   })
@@ -120,7 +121,7 @@ board
   .action(async (opts) => {
     const updates: Record<string, unknown> = {}
     if (opts.status) updates.status = opts.status
-    if (opts.agent) updates.assigned_agent = opts.agent
+    if (opts.agent) updates.assigned_to = opts.agent
     if (opts.priority) updates.priority = parseInt(opts.priority)
 
     const task = await updateTask(opts.id, updates)
@@ -131,7 +132,21 @@ board
         message: opts.message,
       })
     }
-    console.log(`Updated task ${task.id}: status → ${task.status}, agent → ${task.assigned_agent ?? '—'}`)
+    console.log(`Updated task ${task.id}: status → ${task.status}, assigned → ${task.assigned_to ?? '—'}`)
+  })
+
+board
+  .command('projects')
+  .description('List active projects (excludes test- integration artifacts)')
+  .option('--all', 'Include test projects')
+  .action(async (opts) => {
+    const projects = await listProjects({ includeTest: opts.all })
+    console.log('| P | Slug | Name | Owner | Status |')
+    console.log('|---|------|------|-------|--------|')
+    for (const p of projects) {
+      console.log(`| ${p.priority} | ${p.slug} | ${p.name} | ${p.owner ?? '—'} | ${p.status} |`)
+    }
+    console.log(`\nTotal: ${projects.length} projects`)
   })
 
 // Audit financials command

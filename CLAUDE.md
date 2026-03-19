@@ -40,9 +40,13 @@ supabase/ — consolidated migrations
 ## Supabase Tables (Kanban — OptimalOS Instance)
 | Table | Purpose |
 |-------|---------|
-| cli_projects | Project groupings |
-| cli_tasks | Kanban cards with agent assignment, blocking deps, skill refs |
-| cli_task_logs | Audit trail of agent activity |
+| projects | Project groupings (slug, name, owner, priority, status) |
+| tasks | Kanban cards (assigned_to, claimed_by, skill_required, blocked_by, milestone_id) |
+| activity_log | Audit trail of agent activity |
+| discord_mappings | Project → Discord channel/thread links |
+| milestones | Project milestones |
+
+**Note:** `test-\d+` slugs in `projects` are integration test artifacts — `listProjects()` excludes them by default via `TEST_SLUG_PATTERN`.
 
 ## Supabase Tables (Financial — ReturnPro Instance)
 | Table | Purpose |

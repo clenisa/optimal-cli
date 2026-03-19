@@ -12,9 +12,9 @@ const PROJECT_SLUG = 'optimal-cli-refactor'
 
 interface SeedTask {
   title: string
-  skill_ref?: string
+  skill_required?: string
   priority: 1 | 2 | 3 | 4
-  labels: string[]
+  labels?: string[]
   description?: string
 }
 
@@ -22,42 +22,42 @@ const tasks: SeedTask[] = [
   // --- Phase 2 follow-ups (ready — no blockers) ---
   {
     title: 'Implement upload-r1 lib function',
-    skill_ref: '/upload-r1',
+    skill_required: '/upload-r1',
     priority: 2,
     labels: ['returnpro', 'phase-2'],
     description: 'Extract R1 marketplace data upload from dashboard-returnpro into lib/returnpro/upload-r1.ts',
   },
   {
     title: 'Implement upload-netsuite lib function',
-    skill_ref: '/upload-netsuite',
+    skill_required: '/upload-netsuite',
     priority: 2,
     labels: ['returnpro', 'phase-2'],
     description: 'Extract NetSuite XLSM upload pipeline into lib/returnpro/upload-netsuite.ts',
   },
   {
     title: 'Implement upload-income-statements lib function',
-    skill_ref: '/upload-income-statements',
+    skill_required: '/upload-income-statements',
     priority: 2,
     labels: ['returnpro', 'phase-2'],
     description: 'Extract confirmed income statement CSV upload into lib/returnpro/upload-income-statements.ts',
   },
   {
     title: 'Implement rate-anomalies lib function',
-    skill_ref: '/rate-anomalies',
+    skill_required: '/rate-anomalies',
     priority: 3,
     labels: ['returnpro', 'phase-2'],
     description: 'Extract rate anomaly detection logic from dashboard-returnpro into lib/returnpro/rate-anomalies.ts',
   },
   {
     title: 'Implement diagnose-months lib function',
-    skill_ref: '/diagnose-months',
+    skill_required: '/diagnose-months',
     priority: 3,
     labels: ['returnpro', 'phase-2'],
     description: 'Extract month-level diagnostic comparison into lib/returnpro/diagnose-months.ts',
   },
   {
     title: 'Implement generate-netsuite-template lib function',
-    skill_ref: '/generate-netsuite-template',
+    skill_required: '/generate-netsuite-template',
     priority: 3,
     labels: ['returnpro', 'phase-2'],
     description: 'Generate blank NetSuite XLSM templates for data entry into lib/returnpro/generate-netsuite-template.ts',
@@ -66,35 +66,35 @@ const tasks: SeedTask[] = [
   // --- Content follow-ups (ready) ---
   {
     title: 'Implement generate-newsletter-insurance',
-    skill_ref: '/generate-newsletter-insurance',
+    skill_required: '/generate-newsletter-insurance',
     priority: 2,
     labels: ['content', 'phase-3'],
     description: 'Insurance-specific newsletter generation (LIFEINSUR brand) with Groq AI content',
   },
   {
     title: 'Implement distribute-newsletter (n8n webhook)',
-    skill_ref: '/distribute-newsletter',
+    skill_required: '/distribute-newsletter',
     priority: 2,
     labels: ['content', 'phase-3'],
     description: 'Trigger n8n webhook to distribute published newsletter via GoHighLevel email',
   },
   {
     title: 'Implement generate-social-posts pipeline',
-    skill_ref: '/generate-social-posts',
+    skill_required: '/generate-social-posts',
     priority: 2,
     labels: ['content', 'phase-3'],
     description: 'Full pipeline: scrape competitors, analyze patterns, generate 9 social posts, push to Strapi',
   },
   {
     title: 'Implement publish-social-posts',
-    skill_ref: '/publish-social-posts',
+    skill_required: '/publish-social-posts',
     priority: 3,
     labels: ['content', 'phase-3'],
     description: 'Publish scheduled social posts to Meta (IG/FB) via Marketing API',
   },
   {
     title: 'Implement publish-blog',
-    skill_ref: '/publish-blog',
+    skill_required: '/publish-blog',
     priority: 3,
     labels: ['content', 'phase-3'],
     description: 'Publish blog post to Strapi CMS and deploy preview site via Vercel',
@@ -103,21 +103,21 @@ const tasks: SeedTask[] = [
   // --- Infrastructure follow-ups (ready) ---
   {
     title: 'Implement migrate-db skill',
-    skill_ref: '/migrate-db',
+    skill_required: '/migrate-db',
     priority: 3,
     labels: ['infra', 'phase-3'],
     description: 'Run Supabase migrations via CLI (supabase db push --linked) with pre-flight checks',
   },
   {
     title: 'Implement manage-scenarios for budget',
-    skill_ref: '/manage-scenarios',
+    skill_required: '/manage-scenarios',
     priority: 3,
     labels: ['budget', 'phase-3'],
     description: 'CRUD for budget projection scenarios (save/load/compare named adjustment sets)',
   },
   {
     title: 'Implement delete-batch for transactions',
-    skill_ref: '/delete-batch',
+    skill_required: '/delete-batch',
     priority: 3,
     labels: ['transactions', 'phase-3'],
     description: 'Bulk delete transactions by date range or import batch ID with confirmation safeguard',
@@ -182,8 +182,7 @@ async function main() {
         title: task.title,
         description: task.description,
         priority: task.priority,
-        skill_ref: task.skill_ref,
-        labels: task.labels,
+        skill_required: task.skill_required,
       })
       console.log(`  CREATE: "${result.title}" [P${result.priority}] (${result.id})`)
       created++
