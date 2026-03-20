@@ -1201,6 +1201,45 @@ program
     }
   })
 
+// ── Sync dim tables from NetSuite XML export ─────────────────────────
+program
+  .command('sync-dims')
+  .description('Sync dim tables from NetSuite XML export')
+  .requiredOption('--file <path>', 'Path to NetSuite MasterProgramProgramResults .xls file')
+  .option('--execute', 'Apply changes (default is dry-run)', false)
+  .action(async (opts: { file: string; execute: boolean }) => {
+    if (!existsSync(opts.file)) {
+      console.error(`File not found: ${opts.file}`)
+      process.exit(1)
+    }
+    try {
+      const result = await syncDims(opts.file, { execute: opts.execute })
+      console.log(`\nDim Sync Report`)
+      console.log(`  Export: ${result.exportCount} master programs`)
+      console.log(`  New master programs: ${result.newMasterPrograms.length}`)
+      console.log(`  New program IDs: ${result.newProgramIds.length}`)
+      console.log(`  Stale master programs: ${result.staleMasterPrograms.length}`)
+      console.log(`  Deactivation candidates: ${result.deactivateCandidates.length}`)
+      if (result.newMasterPrograms.length > 0) {
+        console.log(`\n  New master programs:`)
+        for (const mp of result.newMasterPrograms) console.log(`    + ${mp.name} → ${mp.programIds.join(', ')}`)
+      }
+      if (result.staleMasterPrograms.length > 0) {
+        console.log(`\n  Stale (in DB, not in export):`)
+        for (const s of result.staleMasterPrograms.slice(0, 10)) console.log(`    ~ ${s.name} (last data: ${s.lastData ?? 'never'})`)
+        if (result.staleMasterPrograms.length > 10) console.log(`    ... and ${result.staleMasterPrograms.length - 10} more`)
+      }
+      if (result.deactivateCandidates.length > 0) {
+        console.log(`\n  Deactivation candidates (no data in 3+ months): ${result.deactivateCandidates.length}`)
+      }
+      if (!opts.execute) console.log(`\n  Dry run — use --execute to apply changes.`)
+      else console.log(`\n  Changes applied.`)
+    } catch (err) {
+      console.error(`Sync failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
 // ── Preflight validation ─────────────────────────────────────────────
 program
   .command('preflight')
