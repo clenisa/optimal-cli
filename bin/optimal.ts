@@ -34,6 +34,8 @@ import { uploadIncomeStatements } from '../lib/returnpro/upload-income.js'
 import { detectRateAnomalies } from '../lib/returnpro/anomalies.js'
 import { diagnoseMonths } from '../lib/returnpro/diagnose.js'
 import { generateNetSuiteTemplate } from '../lib/returnpro/templates.js'
+import { syncDims } from '../lib/returnpro/sync-dims.js'
+import { runPreflight } from '../lib/returnpro/preflight.js'
 import { distributeNewsletter, checkDistributionStatus } from '../lib/newsletter/distribute.js'
 import { generateSocialPosts } from '../lib/social/post-generator.js'
 import { publishSocialPosts, getPublishQueue, retryFailed } from '../lib/social/publish.js'
@@ -1195,6 +1197,39 @@ program
       console.log(`Template saved: ${result.outputPath} (${result.accountCount} accounts)`)
     } catch (err) {
       console.error(`Template generation failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+// ── Preflight validation ─────────────────────────────────────────────
+program
+  .command('preflight')
+  .description('Pre-template validation for a month')
+  .requiredOption('--month <YYYY-MM>', 'Target month')
+  .option('--income-statement <path>', 'MP-level income statement CSV for gap analysis')
+  .action(async (opts: { month: string; incomeStatement?: string }) => {
+    try {
+      const result = await runPreflight(opts.month, {
+        incomeStatementPath: opts.incomeStatement,
+      })
+      console.log(`\nPre-flight Check — ${opts.month}`)
+      if (result.gaps.length === 0) {
+        console.log(`  ✓ ${result.covered}/${result.totalMPs} income statement MPs have dim coverage`)
+      } else {
+        console.log(`  ✗ ${result.covered}/${result.totalMPs} income statement MPs covered`)
+        console.log(`\n  Gaps:`)
+        for (const g of result.gaps) {
+          console.log(`    - ${g.name}: $${Math.abs(g.totalDollars).toLocaleString()}`)
+        }
+      }
+      if (result.fpaExclusions.length > 0) {
+        console.log(`\n  ℹ ${result.fpaExclusions.length} FP&A-only programs excluded from template`)
+      }
+      console.log(`\n  Active programs: ${result.activePrograms}`)
+      console.log(`  Ready: ${result.ready ? '✓ Yes' : '✗ No — resolve gaps first'}`)
+      process.exit(result.ready ? 0 : 1)
+    } catch (err) {
+      console.error(`Preflight failed: ${err instanceof Error ? err.message : String(err)}`)
       process.exit(1)
     }
   })
