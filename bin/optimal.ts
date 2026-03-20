@@ -36,6 +36,7 @@ import { diagnoseMonths } from '../lib/returnpro/diagnose.js'
 import { generateNetSuiteTemplate } from '../lib/returnpro/templates.js'
 import { syncDims } from '../lib/returnpro/sync-dims.js'
 import { runPreflight } from '../lib/returnpro/preflight.js'
+import { triggerPipeline } from '../lib/returnpro/pipeline.js'
 import { distributeNewsletter, checkDistributionStatus } from '../lib/newsletter/distribute.js'
 import { generateSocialPosts } from '../lib/social/post-generator.js'
 import { publishSocialPosts, getPublishQueue, retryFailed } from '../lib/social/publish.js'
@@ -2503,6 +2504,31 @@ sync
     for (const b of bots) {
       const lastSync = b.last_synced ? b.last_synced.slice(0, 16).replace('T', ' ') : 'never'
       console.log(`| ${b.agent_name.padEnd(15)} | ${b.owner_email.padEnd(17)} | ${b.is_admin ? '✓' : ' '}    | ${lastSync} |`)
+    }
+  })
+
+program
+  .command('run-pipeline')
+  .description('Trigger ReturnPro audit/anomaly/dims pipeline via n8n')
+  .option('--month <YYYY-MM>', 'Target month for context')
+  .option('--steps <csv>', 'Specific steps: audit,anomaly_scan,dims_check,notify')
+  .option('--no-poll', 'Fire and forget without waiting for results')
+  .action(async (opts: { month?: string; steps?: string; poll: boolean }) => {
+    try {
+      const steps = opts.steps ? opts.steps.split(',').map(s => s.trim()) : undefined
+      const result = await triggerPipeline({ month: opts.month, steps, poll: opts.poll })
+      console.log(`\nReturnPro Pipeline — ${result.pipelineId}`)
+      for (const step of result.steps) {
+        const icon = step.status === 'success' ? '✓' : step.status === 'failed' ? '✗' : step.status === 'running' ? '⟳' : '○'
+        const dur = step.duration_ms ? `${(step.duration_ms / 1000).toFixed(1)}s` : ''
+        console.log(`  ${icon} ${step.step.padEnd(16)} ${step.status.padEnd(10)} ${dur}`)
+      }
+      if (result.timedOut) console.log(`\n  ⚠ Timed out after 120s — check n8n for results`)
+      else if (result.allSuccess) console.log(`\n  All steps completed successfully.`)
+      else console.log(`\n  Some steps failed — check n8n execution history.`)
+    } catch (err) {
+      console.error(`Pipeline failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
     }
   })
 
