@@ -37,6 +37,7 @@ import { generateNetSuiteTemplate } from '../lib/returnpro/templates.js'
 import { syncDims } from '../lib/returnpro/sync-dims.js'
 import { runPreflight } from '../lib/returnpro/preflight.js'
 import { triggerPipeline } from '../lib/returnpro/pipeline.js'
+import { runMonthClose } from '../lib/returnpro/month-close.js'
 import { distributeNewsletter, checkDistributionStatus } from '../lib/newsletter/distribute.js'
 import { generateSocialPosts } from '../lib/social/post-generator.js'
 import { publishSocialPosts, getPublishQueue, retryFailed } from '../lib/social/publish.js'
@@ -2528,6 +2529,24 @@ program
       else console.log(`\n  Some steps failed — check n8n execution history.`)
     } catch (err) {
       console.error(`Pipeline failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('month-close')
+  .description('Interactive monthly close workflow')
+  .requiredOption('--month <YYYY-MM>', 'Target month (e.g., 2026-02)')
+  .option('--from <step>', 'Start from step number', '1')
+  .option('--skip <steps>', 'Comma-separated step numbers to skip')
+  .option('--user-id <uuid>', 'User ID for uploads', '00000000-0000-0000-0000-000000000000')
+  .action(async (opts: { month: string; from: string; skip?: string; userId: string }) => {
+    try {
+      const from = parseInt(opts.from, 10)
+      const skip = opts.skip ? opts.skip.split(',').map(s => parseInt(s.trim(), 10)) : []
+      await runMonthClose(opts.month, { from, skip, userId: opts.userId })
+    } catch (err) {
+      console.error(`Month close failed: ${err instanceof Error ? err.message : String(err)}`)
       process.exit(1)
     }
   })
