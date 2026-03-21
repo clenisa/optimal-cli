@@ -75,6 +75,13 @@ import {
   trackAssetUsage, listAssetUsage, formatAssetTable,
   type AssetType, type AssetStatus,
 } from '../lib/assets/index.js'
+import {
+  checkNpmVersion,
+  registerBot,
+  getAdminConfig,
+  saveBotConfig,
+  listRegisteredBots,
+} from '../lib/bot-sync/index.js'
 
 // Dynamic version from package.json (works in published package)
 let CLI_VERSION = '0.0.0'
@@ -758,10 +765,48 @@ program
       console.log(`✗ Config: error reading - ${e instanceof Error ? e.message : String(e)}`)
     }
     
+    // Check sync readiness
+    console.log('\n--- Bot Sync Readiness ---')
+    const syncVars = ['OPTIMAL_AGENT_NAME', 'OPTIMAL_OWNER_EMAIL']
+    let syncReady = true
+    for (const key of syncVars) {
+      if (process.env[key]) {
+        console.log(`✓ ${key}: ${process.env[key]}`)
+      } else {
+        console.log(`✗ ${key}: not set`)
+        syncReady = false
+      }
+    }
+    
+    // Check if bot is registered
+    if (syncReady) {
+      const bots = await listRegisteredBots()
+      const agentName = process.env.OPTIMAL_AGENT_NAME!
+      const registered = bots.find(b => b.agent_name === agentName)
+      if (registered) {
+        console.log(`✓ Registered: ${agentName} (${registered.is_admin ? 'admin' : 'bot'})`)
+      } else {
+        console.log(`○ Not registered: run 'optimal sync register --agent ${agentName} --email ${process.env.OPTIMAL_OWNER_EMAIL}'`)
+      }
+    }
+    
+    // Check npm version status
+    try {
+      const npmResult = await checkNpmVersion()
+      if (npmResult.latestVersion && npmResult.currentVersion) {
+        console.log(`\n--- NPM Versions ---`)
+        console.log(`  optimal-cli: ${npmResult.currentVersion} → ${npmResult.latestVersion}`)
+        if (npmResult.hasNewMajor) {
+          console.log(`  ⚠️  New major version available! Run: optimal sync npm:watch`)
+        }
+      }
+    } catch { /* ignore npm check failures */ }
+    
     console.log('\n--- Quick Fixes ---')
     console.log('1. Install: npm install -g optimal-cli')
     console.log('2. Config: optimal config init')
-    console.log('3. Env: source ~/.optimal/.env')
+    console.log('3. Sync: optimal sync register --agent <name> --email <email>')
+    console.log('4. Env: source ~/.optimal/.env')
   })
 
 // Budget projection commands
@@ -2278,6 +2323,113 @@ sync
   .option('--role <name>', 'Required Discord role name for access', 'Optimal')
   .action(async (opts: { role: string }) => {
     await startWatch({ requiredRole: opts.role })
+  })
+
+// Bot sync commands
+sync
+  .command('npm:watch')
+  .description('Check npm registry for new version of optimal-cli')
+  .option('--package <name>', 'Package name to check', 'optimal-cli')
+  .action(async (opts: { package: string }) => {
+    console.log(`Checking npm for ${opts.package}...`)
+    const result = await checkNpmVersion(opts.package)
+    if (result.latestVersion) {
+      console.log(`Current version: ${result.currentVersion}`)
+      console.log(`Latest version:  ${result.latestVersion}`)
+      if (result.hasNewMajor) {
+        console.log(`\n⚠️  New major version detected!`)
+        if (result.taskCreated) {
+          console.log(`✓ Created upgrade task in board`)
+        }
+      } else {
+        console.log(`\n✓ Up to date`)
+      }
+    } else {
+      fmtError('Failed to fetch npm version')
+    }
+  })
+
+sync
+  .command('register')
+  .description('Register this bot with admin config and sync credentials')
+  .option('--agent <name>', 'Agent/bot name')
+  .option('--email <email>', 'Owner email (your email)')
+  .option('--admin', 'Register as admin (publishes config for other bots)', false)
+  .action(async (opts: { agent?: string; email?: string; admin: boolean }) => {
+    const agentName = opts.agent || process.env.OPTIMAL_AGENT_NAME
+    const email = opts.email || process.env.OPTIMAL_OWNER_EMAIL
+    
+    if (!agentName || !email) {
+      fmtError('Error: --agent and --email required, or set OPTIMAL_AGENT_NAME and OPTIMAL_OWNER_EMAIL')
+      console.log('Usage: optimal sync register --agent oracle --email you@example.com [--admin]')
+      process.exit(1)
+    }
+    
+    console.log(`Registering bot: ${agentName} (${email})${opts.admin ? ' [ADMIN]' : ''}`)
+    
+    // Register the bot
+    const regResult = await registerBot(agentName, email, opts.admin)
+    if (!regResult.success) {
+      fmtError(`Registration failed: ${regResult.message}`)
+      process.exit(1)
+    }
+    success(regResult.message)
+    
+    // If admin, save current config for sharing
+    if (opts.admin) {
+      // Try to load and save config
+      try {
+        const localConfig = await readLocalConfig()
+        // Read workspace files if they exist
+        const workspacePath = process.env.OPENCLAW_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`
+        let workspaceFiles: any = null
+        
+        const fs = await import('node:fs')
+        const files = ['AGENTS.md', 'SOUL.md', 'USER.md', 'TOOLS.md']
+        workspaceFiles = {}
+        for (const file of files) {
+          try {
+            workspaceFiles[file] = fs.readFileSync(`${workspacePath}/${file}`, 'utf-8')
+          } catch { /* ignore missing files */ }
+        }
+        
+        const saveResult = await saveBotConfig(agentName, email, localConfig, workspaceFiles)
+        if (saveResult.success) {
+          success('Admin config saved for syncing')
+        }
+      } catch (e) {
+        fmtWarn(`Could not save admin config: ${e}`)
+      }
+    } else {
+      // If not admin, try to pull admin config
+      const adminConfig = await getAdminConfig(email)
+      if (adminConfig?.config || adminConfig?.workspace) {
+        console.log('\n📥 Received admin config:')
+        if (adminConfig.config) console.log('  - openclaw.json')
+        if (adminConfig.workspace) console.log('  - workspace files')
+        console.log('\nNote: Config sync to local files not yet implemented')
+        console.log('      Use: optimal config import --in <path>')
+      } else {
+        fmtWarn('No admin config found to sync')
+      }
+    }
+  })
+
+sync
+  .command('bots')
+  .description('List registered bots')
+  .action(async () => {
+    const bots = await listRegisteredBots()
+    if (bots.length === 0) {
+      console.log('No registered bots')
+      return
+    }
+    console.log('| Agent           | Owner             | Admin | Last Synced       |')
+    console.log('|-----------------|-------------------|-------|-------------------|')
+    for (const b of bots) {
+      const lastSync = b.last_synced ? b.last_synced.slice(0, 16).replace('T', ' ') : 'never'
+      console.log(`| ${b.agent_name.padEnd(15)} | ${b.owner_email.padEnd(17)} | ${b.is_admin ? '✓' : ' '}    | ${lastSync} |`)
+    }
   })
 
 program.parseAsync()
