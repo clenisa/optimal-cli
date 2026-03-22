@@ -43,10 +43,10 @@ export class StrapiClientError extends Error {
 // ── Config ───────────────────────────────────────────────────────────
 
 function getConfig() {
-  const url = process.env.STRAPI_URL
-  const token = process.env.STRAPI_API_TOKEN
+  const url = process.env.STRAPI_URL ?? process.env.STRAPI_BASE_URL
+  const token = process.env.STRAPI_API_TOKEN ?? process.env.STRAPI_TOKEN
   if (!url || !token) {
-    throw new Error('Missing env vars: STRAPI_URL, STRAPI_API_TOKEN')
+    throw new Error('Missing env vars: STRAPI_URL (or STRAPI_BASE_URL), STRAPI_API_TOKEN (or STRAPI_TOKEN)')
   }
   return { url: url.replace(/\/+$/, ''), token }
 }

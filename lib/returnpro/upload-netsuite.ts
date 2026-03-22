@@ -246,6 +246,9 @@ async function parseDataEntrySheet(
         obj[headers[i]] = (cellVal as { richText: Array<{ text: string }> }).richText
           .map(r => r.text)
           .join('')
+      // ExcelJS formula cell — extract the cached result
+      } else if (cellVal && typeof cellVal === 'object' && 'formula' in (cellVal as object)) {
+        obj[headers[i]] = (cellVal as { formula: string; result?: unknown }).result ?? ''
       } else {
         obj[headers[i]] = cellVal ?? ''
       }

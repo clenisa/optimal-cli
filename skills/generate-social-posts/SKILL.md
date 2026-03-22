@@ -64,4 +64,4 @@ Optional: `GROQ_MODEL` (default: llama-3.3-70b-versatile)
 - **Playwright browser**: Requires one-time `npx playwright install chromium`.
 
 ## Status
-Implementation status: Not yet implemented. Spec only. Lib function `lib/social/post-generator.ts` to be built as a multi-step orchestrator calling existing scraper and CMS functions.
+Implementation status: **Implemented.** `lib/social/post-generator.ts` generates campaign-themed posts via Groq AI with brand-specific voice configs (OPTIMAL, CRE-11TRUST, LIFEINSUR), Unsplash image search, and Strapi push. Posts created as drafts by default.

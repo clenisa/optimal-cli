@@ -1315,16 +1315,18 @@ program
 program
   .command('generate-social-posts')
   .description('Generate AI-powered social media ad posts and push to Strapi')
-  .requiredOption('--brand <brand>', 'Brand: CRE-11TRUST or LIFEINSUR')
+  .requiredOption('--brand <brand>', 'Brand: OPTIMAL, CRE-11TRUST, or LIFEINSUR')
   .option('--count <n>', 'Number of posts to generate', '9')
   .option('--week-of <date>', 'Week start date YYYY-MM-DD (default: next Monday)')
+  .option('--campaign <theme>', 'Campaign theme override (default: auto-rotated)')
   .option('--dry-run', 'Generate without pushing to Strapi', false)
-  .action(async (opts: { brand: string; count: string; weekOf?: string; dryRun: boolean }) => {
+  .action(async (opts: { brand: string; count: string; weekOf?: string; campaign?: string; dryRun: boolean }) => {
     try {
       const result = await generateSocialPosts({
         brand: opts.brand,
         count: parseInt(opts.count),
         weekOf: opts.weekOf,
+        campaign: opts.campaign,
         dryRun: opts.dryRun,
       })
       console.log(`Created ${result.postsCreated} posts for ${result.brand}`)
@@ -1344,7 +1346,7 @@ program
 program
   .command('publish-social-posts')
   .description('Publish pending social posts to platforms via n8n')
-  .requiredOption('--brand <brand>', 'Brand: CRE-11TRUST or LIFEINSUR')
+  .requiredOption('--brand <brand>', 'Brand: OPTIMAL, CRE-11TRUST, or LIFEINSUR')
   .option('--limit <n>', 'Max posts to publish')
   .option('--dry-run', 'Preview without publishing', false)
   .option('--retry', 'Retry previously failed posts', false)

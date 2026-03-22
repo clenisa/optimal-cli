@@ -1,9 +1,7 @@
 /**
  * Social Post Generation Pipeline
  *
- * Ported from Python: ~/projects/newsletter-automation social post pipeline
- *
- * Pipeline: Groq AI generates post ideas -> Unsplash image search -> Strapi push
+ * Pipeline: Groq AI generates campaign-themed posts -> Unsplash image search -> Strapi push
  *
  * Functions:
  *   callGroq()            — call Groq API (OpenAI-compatible) for AI content
@@ -26,6 +24,8 @@ export interface GeneratePostsOptions {
   platforms?: string[]
   /** Generate but do not push to Strapi */
   dryRun?: boolean
+  /** Optional campaign theme override */
+  campaign?: string
 }
 
 export interface SocialPostData {
@@ -34,17 +34,21 @@ export interface SocialPostData {
   cta_text: string
   cta_url: string
   image_url: string | null
+  image_alt: string
   overlay_style: 'dark-bottom' | 'brand-bottom' | 'brand-full' | 'dark-full'
   template: string
   platform: string
   brand: string
   scheduled_date: string
+  campaign_group: string
+  campaign_month: string
   delivery_status: 'pending'
 }
 
 export interface GeneratePostsResult {
   brand: string
   postsCreated: number
+  campaign: string
   posts: Array<{
     documentId: string
     headline: string
@@ -73,6 +77,7 @@ interface UnsplashSearchResult {
     urls?: {
       regular?: string
     }
+    alt_description?: string
   }>
 }
 
@@ -81,9 +86,148 @@ interface AiPostIdea {
   body: string
   cta_text: string
   cta_url: string
+  hashtags: string[]
   image_search_query: string
+  image_alt: string
   overlay_style: 'dark-bottom' | 'brand-bottom' | 'brand-full' | 'dark-full'
   template: string
+}
+
+// ── Brand Configs ───────────────────────────────────────────────────
+
+interface BrandConfig {
+  displayName: string
+  ctaUrl: string
+  industry: string
+  voice: string
+  tonePillars: string[]
+  contentThemes: string[]
+  hashtagSets: string[][]
+  antiPatterns: string[]
+  visualAesthetic: string
+}
+
+const BRAND_CONFIGS: Record<string, BrandConfig> = {
+  OPTIMAL: {
+    displayName: 'Optimal Tech Corp',
+    ctaUrl: 'https://optimal.miami',
+    industry: 'AI consulting and automation',
+    voice: `You are the voice of Optimal Tech Corp — a Miami-based AI consulting company that makes
+cutting-edge AI accessible to real businesses. Your tone sits at the intersection of Gen Z internet
+culture and Gen X no-bullshit pragmatism. You're technically credible but never dry. You speak like
+a founder who browses Hacker News and also makes TikToks. Think: Vercel's brand clarity meets
+Midjourney's creative energy meets a late-night Discord server where senior engineers drop knowledge.`,
+    tonePillars: [
+      'Confident but not arrogant — "we built this" not "we\'re the best"',
+      'Internet-native — use natural abbreviations, sentence fragments, and conversational rhythm',
+      'Technically grounded — reference real tools, real patterns, real outcomes',
+      'Forward-looking — everything is about what\'s possible now, not what was hard before',
+      'Miami energy — warm, ambitious, multicultural, builder culture',
+    ],
+    contentThemes: [
+      'AI automation wins (before/after, time saved, ROI)',
+      'Behind-the-scenes of builds (dev process, stack choices, architecture)',
+      'Hot takes on AI news (new model drops, tool launches, industry shifts)',
+      'Client transformation stories (anonymized results, patterns we see)',
+      'AI literacy for business leaders (demystify, educate, empower)',
+      'Miami tech scene and founder culture',
+      'Tool spotlights (what we actually use and why)',
+      'Future of work with AI (not dystopian, pragmatic and exciting)',
+    ],
+    hashtagSets: [
+      ['#AI', '#MachineLearning', '#TechConsulting', '#OptimalTech'],
+      ['#AIautomation', '#BuildInPublic', '#MiamiTech', '#StartupLife'],
+      ['#ArtificialIntelligence', '#FutureOfWork', '#AItools', '#Automation'],
+      ['#AIconsulting', '#TechMiami', '#DigitalTransformation', '#OptimalTech'],
+      ['#GenAI', '#LLMs', '#AIagents', '#DevLife', '#OptimalTech'],
+    ],
+    antiPatterns: [
+      'NO corporate buzzword soup ("leverage", "synergize", "ecosystem", "paradigm shift")',
+      'NO generic stock-photo captions ("A team collaborating in a modern office")',
+      'NO cringe engagement bait ("Tag someone who needs to hear this!")',
+      'NO empty hype ("AI will change everything!" with no substance)',
+      'NO walls of text — if the body exceeds 3 sentences, tighten it',
+      'NO emojis in headlines — emojis go in body only, max 2 per post',
+      'NO "Did you know?" or "Here\'s the thing:" openers',
+      'NEVER start with the brand name',
+    ],
+    visualAesthetic: `Search for: dark moody tech, neon gradients, terminal screenshots, circuit boards macro,
+abstract data visualization, cyberpunk architecture, minimal workspace with code on screen, Miami skyline
+at night, server room aesthetics, AI-generated abstract art. Avoid: handshakes, stock office scenes,
+people pointing at whiteboards, generic team photos, clip-art style graphics.`,
+  },
+  'CRE-11TRUST': {
+    displayName: 'ElevenTrust Commercial Real Estate',
+    ctaUrl: 'https://eleventrust.com',
+    industry: 'commercial real estate in South Florida',
+    voice: 'Professional, authoritative commercial real estate voice for South Florida market.',
+    tonePillars: [
+      'Market authority — data-driven insights on South Florida CRE',
+      'Professional but approachable — not stuffy, but credible',
+      'Locally grounded — specific neighborhoods, developments, deals',
+    ],
+    contentThemes: [
+      'Market analysis and trends',
+      'Property spotlights',
+      'Investment insights',
+      'South Florida development news',
+    ],
+    hashtagSets: [
+      ['#CRE', '#SouthFlorida', '#CommercialRealEstate', '#MiamiRealEstate'],
+      ['#RealEstateInvesting', '#CREmarket', '#PropertyInvestment', '#ElevenTrust'],
+    ],
+    antiPatterns: [
+      'NO residential real estate language',
+      'NO hype without market data',
+    ],
+    visualAesthetic: 'Commercial buildings, aerial shots, development sites, Miami skyline, professional interiors.',
+  },
+  LIFEINSUR: {
+    displayName: 'Anchor Point Insurance Co.',
+    ctaUrl: 'https://anchorpointinsurance.com',
+    industry: 'life insurance and financial protection',
+    voice: 'Warm, trustworthy insurance voice that speaks to families and individuals about protection.',
+    tonePillars: [
+      'Empathetic — speak to real fears and hopes',
+      'Clear — no insurance jargon without explanation',
+      'Action-oriented — always give a concrete next step',
+    ],
+    contentThemes: [
+      'Family protection stories',
+      'Life insurance myths debunked',
+      'Financial planning basics',
+      'Policy comparison guides',
+    ],
+    hashtagSets: [
+      ['#LifeInsurance', '#FamilyProtection', '#FinancialPlanning', '#AnchorPoint'],
+      ['#InsuranceMatters', '#FamilyFirst', '#FinancialSecurity', '#ProtectWhatMatters'],
+    ],
+    antiPatterns: [
+      'NO fear-mongering',
+      'NO heavy jargon without context',
+    ],
+    visualAesthetic: 'Families, homes, nature scenes conveying safety, warm tones, lifestyle photography.',
+  },
+}
+
+// ── Campaign Themes ─────────────────────────────────────────────────
+
+const OPTIMAL_CAMPAIGNS = [
+  'AI Automation Week',
+  'Build in Public',
+  'Miami Tech Spotlight',
+  'AI Tools We Ship With',
+  'Client Wins',
+  'Future of Work',
+  'Hot Takes',
+  'Under the Hood',
+]
+
+function pickCampaign(weekOf: string): string {
+  // Rotate through campaigns based on week number
+  const d = new Date(weekOf)
+  const weekNum = Math.ceil((d.getTime() - new Date(d.getFullYear(), 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000))
+  return OPTIMAL_CAMPAIGNS[weekNum % OPTIMAL_CAMPAIGNS.length]
 }
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -95,19 +239,6 @@ const OVERLAY_STYLES: Array<'dark-bottom' | 'brand-bottom' | 'brand-full' | 'dar
   'dark-full',
 ]
 
-const BRAND_CONFIGS: Record<string, { displayName: string; ctaUrl: string; industry: string }> = {
-  'CRE-11TRUST': {
-    displayName: 'ElevenTrust Commercial Real Estate',
-    ctaUrl: 'https://eleventrust.com',
-    industry: 'commercial real estate in South Florida',
-  },
-  'LIFEINSUR': {
-    displayName: 'Anchor Point Insurance Co.',
-    ctaUrl: 'https://anchorpointinsurance.com',
-    industry: 'life insurance and financial protection',
-  },
-}
-
 // ── Environment helper ───────────────────────────────────────────────
 
 function requireEnv(name: string): string {
@@ -118,12 +249,6 @@ function requireEnv(name: string): string {
 
 // ── 1. Groq API Call ─────────────────────────────────────────────────
 
-/**
- * Call the Groq API (OpenAI-compatible) and return the assistant's response text.
- *
- * @example
- *   const response = await callGroq('You are a copywriter.', 'Write a tagline.')
- */
 export async function callGroq(
   systemPrompt: string,
   userPrompt: string,
@@ -145,7 +270,8 @@ export async function callGroq(
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.8,
+      temperature: 0.9,
+      max_tokens: 4096,
     }),
   })
 
@@ -160,20 +286,11 @@ export async function callGroq(
 
 // ── 2. Unsplash Image Search ─────────────────────────────────────────
 
-/**
- * Search Unsplash NAPI for a themed stock photo URL.
- * Returns the `.results[0].urls.regular` URL, or null if not found.
- *
- * Note: Uses the public NAPI endpoint — no auth required but may be rate-limited.
- *
- * @example
- *   const url = await searchUnsplashImage('life insurance family protection')
- */
-export async function searchUnsplashImage(query: string): Promise<string | null> {
+export async function searchUnsplashImage(query: string): Promise<{ url: string; alt: string } | null> {
   try {
     const encodedQuery = encodeURIComponent(query)
     const response = await fetch(
-      `https://unsplash.com/napi/search/photos?query=${encodedQuery}&per_page=3`,
+      `https://unsplash.com/napi/search/photos?query=${encodedQuery}&per_page=5&orientation=squarish`,
       {
         headers: {
           'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -188,13 +305,18 @@ export async function searchUnsplashImage(query: string): Promise<string | null>
     }
 
     const data = await response.json() as UnsplashSearchResult
-    const url = data.results?.[0]?.urls?.regular ?? null
-
-    if (!url) {
+    // Pick from top 3 results randomly for variety
+    const pool = data.results?.slice(0, 3) ?? []
+    if (pool.length === 0) {
       console.warn(`   [Unsplash] No results for query: "${query}"`)
+      return null
     }
 
-    return url
+    const pick = pool[Math.floor(Math.random() * pool.length)]
+    const url = pick.urls?.regular ?? null
+    if (!url) return null
+
+    return { url, alt: pick.alt_description ?? query }
   } catch (err) {
     console.warn(`   [Unsplash] Error searching for "${query}": ${(err as Error).message}`)
     return null
@@ -203,19 +325,13 @@ export async function searchUnsplashImage(query: string): Promise<string | null>
 
 // ── 3. Build Weekly Schedule ─────────────────────────────────────────
 
-/**
- * Distribute post dates across a week (Mon-Fri + weekend for overflow).
- * Returns an array of ISO date strings (YYYY-MM-DD).
- */
 function buildWeeklySchedule(weekOf: string, count: number): string[] {
   const start = new Date(weekOf)
 
-  // Ensure we start from Monday — find the Monday of the given week
-  const dayOfWeek = start.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+  const dayOfWeek = start.getDay()
   const daysToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
   start.setDate(start.getDate() + daysToMonday)
 
-  // Build Mon-Sun sequence (7 days)
   const weekDays: string[] = []
   for (let i = 0; i < 7; i++) {
     const d = new Date(start)
@@ -223,16 +339,14 @@ function buildWeeklySchedule(weekOf: string, count: number): string[] {
     weekDays.push(d.toISOString().slice(0, 10))
   }
 
-  // Fill schedule: Mon-Fri first, then Sat-Sun for overflow
   const schedule: string[] = []
-  const weekdaySlots = weekDays.slice(0, 5) // Mon-Fri
-  const weekendSlots = weekDays.slice(5)    // Sat-Sun
+  const weekdaySlots = weekDays.slice(0, 5)
+  const weekendSlots = weekDays.slice(5)
 
   for (let i = 0; i < count; i++) {
     if (i < weekdaySlots.length) {
       schedule.push(weekdaySlots[i])
     } else {
-      // Overflow into weekend, then repeat weekdays
       const overflowSlots = [...weekendSlots, ...weekdaySlots]
       schedule.push(overflowSlots[(i - weekdaySlots.length) % overflowSlots.length])
     }
@@ -245,17 +359,25 @@ function buildWeeklySchedule(weekOf: string, count: number): string[] {
 
 function buildSystemPrompt(brand: string): string {
   const config = BRAND_CONFIGS[brand]
-  const displayName = config?.displayName ?? brand
-  const industry = config?.industry ?? 'professional services'
+  if (!config) {
+    return `You are a social media copywriter for ${brand}. Generate engaging, platform-native posts.
+Always respond with ONLY valid JSON — no markdown fences, no explanations.`
+  }
 
-  return `You are an expert social media copywriter specializing in ${industry} for ${displayName}.
+  return `${config.voice}
 
-Your task is to generate engaging, conversion-focused social media ad posts. Each post must:
-- Hook the viewer in the first line (no generic openers)
-- Speak to a specific pain point or aspiration
-- Include a clear, action-oriented CTA
-- Be authentic and avoid jargon
-- Be appropriate for paid social advertising (Instagram and Facebook)
+TONE PILLARS:
+${config.tonePillars.map((p, i) => `${i + 1}. ${p}`).join('\n')}
+
+ANTI-PATTERNS (hard rules — violating these = instant rejection):
+${config.antiPatterns.map(p => `- ${p}`).join('\n')}
+
+VISUAL DIRECTION for image search queries:
+${config.visualAesthetic}
+
+You write social media posts that perform. Your posts get saved, shared, and drive clicks.
+Every post should feel like it was written by a human who actually works in this space — not
+an AI trying to sound professional.
 
 Always respond with ONLY valid JSON — no markdown fences, no explanations, no extra text.`
 }
@@ -265,31 +387,61 @@ function buildUserPrompt(
   platforms: string[],
   weekStart: string,
   count: number,
+  campaign: string,
 ): string {
   const config = BRAND_CONFIGS[brand]
   const displayName = config?.displayName ?? brand
   const ctaUrl = config?.ctaUrl ?? 'https://example.com'
   const industry = config?.industry ?? 'professional services'
 
-  return `Generate ${count} social media ad posts for ${displayName} (brand: ${brand}).
+  const hashtagSets = config?.hashtagSets ?? [['#' + brand]]
+  const themes = config?.contentThemes ?? ['industry insights', 'company updates']
 
+  return `Generate ${count} social media posts for ${displayName} (brand: ${brand}).
+
+CAMPAIGN: "${campaign}"
 Target platforms: ${platforms.join(', ')}
 Week of: ${weekStart}
 Industry: ${industry}
 CTA URL: ${ctaUrl}
 
-Return a JSON array of exactly ${count} post objects. Each object must have these exact fields:
-- "headline": string — attention-grabbing first line (max 60 chars)
-- "body": string — 2-4 sentence post copy (max 280 chars)
-- "cta_text": string — button label (e.g., "Get a Free Quote", "Learn More", "Schedule a Call")
-- "cta_url": string — full URL for the CTA
-- "image_search_query": string — 3-5 keyword search string to find a relevant stock photo on Unsplash
-- "overlay_style": string — one of: "dark-bottom", "brand-bottom", "brand-full", "dark-full"
-- "template": string — one of: "standard", "quote", "offer", "testimonial", "educational"
+CONTENT THEMES to draw from (pick the most relevant for this campaign):
+${themes.map((t, i) => `${i + 1}. ${t}`).join('\n')}
 
-Vary the templates, tones, and angles across the ${count} posts. Mix benefit-focused, story-driven, and urgency-based approaches.
+HASHTAG POOLS (pick 3-5 per post — fewer targeted tags outperform 10+ generic ones):
+${hashtagSets.map(set => set.join(' ')).join('\n')}
+Target niche hashtags (100K-1M posts). Ratio: 80% niche + 20% trending.
+Caption SEO matters more than hashtags now — use keyword-rich captions for discovery.
 
-Return ONLY the JSON array, no other text.`
+PLATFORM-SPECIFIC RULES:
+- Instagram: Visual-first. Headline IS the hook line. Body = caption (can be longer, up to 400 chars). Hashtags in body after a line break.
+- Facebook: Conversational. Body can be slightly longer. CTA text matters more.
+- LinkedIn: Professional but not boring. Thought-leadership angle. No hashtag spam.
+
+POST STRUCTURE:
+- headline: The HOOK — first thing people read. Make it scroll-stopping. Max 60 chars. No emojis.
+- body: The caption/copy. 2-4 sentences. Include hashtags at the end for IG. Max 400 chars.
+  For IG: end body with a line break then hashtags.
+  For FB/LinkedIn: weave hashtags naturally or skip them.
+- cta_text: Button label — short, action-oriented ("Book a Call", "See the Build", "Try It Free")
+- cta_url: ${ctaUrl}
+- hashtags: Array of 3-5 hashtag strings (without # prefix — we'll add it)
+- image_search_query: 4-6 word aesthetic search for Unsplash. Think editorial, moody, high-contrast.
+  Good: "neon code terminal dark", "miami skyline night aerial", "abstract neural network visualization"
+  Bad: "business team meeting", "technology concept", "AI robot"
+- image_alt: Accessible alt text describing the ideal image (1 sentence)
+- overlay_style: one of "dark-bottom", "brand-bottom", "brand-full", "dark-full"
+  Use "dark-bottom" for image-heavy posts. "brand-full" for text-heavy/quote posts.
+- template: one of "standard", "quote", "hot-take", "case-study", "educational", "behind-the-scenes", "announcement"
+
+VARIETY RULES:
+- At least 2 different templates across the ${count} posts
+- At least 2 different overlay styles
+- Mix short punchy posts with slightly longer narrative ones
+- Each post must have a DIFFERENT angle — never repeat the same idea twice
+- Vary sentence structure — not every post should start with a question or statement
+
+Return a JSON array of exactly ${count} post objects. Return ONLY the JSON array, no other text.`
 }
 
 // ── 5. Parse AI Response ─────────────────────────────────────────────
@@ -297,7 +449,6 @@ Return ONLY the JSON array, no other text.`
 function parseAiPostIdeas(raw: string): AiPostIdea[] {
   let content = raw.trim()
 
-  // Strip markdown fences if present
   if (content.startsWith('```')) {
     const firstNewline = content.indexOf('\n')
     content = firstNewline !== -1 ? content.slice(firstNewline + 1) : content.slice(3)
@@ -306,10 +457,29 @@ function parseAiPostIdeas(raw: string): AiPostIdea[] {
     content = content.slice(0, -3).trim()
   }
 
+  // Sanitize control characters inside JSON string values (LLMs put literal newlines/tabs in strings)
+  content = content.replace(/"(?:[^"\\]|\\.)*"/g, (match) =>
+    match.replace(/[\x00-\x1f]/g, (ch) => {
+      if (ch === '\n') return '\\n'
+      if (ch === '\r') return '\\r'
+      if (ch === '\t') return '\\t'
+      return ''
+    }),
+  )
+
   const parsed = JSON.parse(content) as AiPostIdea[]
 
   if (!Array.isArray(parsed)) {
     throw new Error('AI response is not a JSON array')
+  }
+
+  // Post-process: ensure hashtags are prefixed
+  for (const post of parsed) {
+    if (post.hashtags) {
+      post.hashtags = post.hashtags.map(h => h.startsWith('#') ? h : `#${h}`)
+    } else {
+      post.hashtags = []
+    }
   }
 
   return parsed
@@ -317,23 +487,6 @@ function parseAiPostIdeas(raw: string): AiPostIdea[] {
 
 // ── 6. Orchestrator ──────────────────────────────────────────────────
 
-/**
- * Main orchestrator: generate AI-powered social media posts and push to Strapi.
- *
- * Steps:
- *   1. Call Groq to generate post ideas as JSON
- *   2. For each post, search Unsplash for a themed image
- *   3. Build SocialPostData and push to Strapi via POST /api/social-posts
- *   4. Return summary of created posts and any errors
- *
- * @example
- *   const result = await generateSocialPosts({
- *     brand: 'LIFEINSUR',
- *     count: 9,
- *     weekOf: '2026-03-02',
- *   })
- *   console.log(`Created ${result.postsCreated} posts`)
- */
 export async function generateSocialPosts(
   opts: GeneratePostsOptions,
 ): Promise<GeneratePostsResult> {
@@ -347,11 +500,14 @@ export async function generateSocialPosts(
 
   const config = BRAND_CONFIGS[brand]
   const displayName = config?.displayName ?? brand
+  const campaign = opts.campaign ?? pickCampaign(weekOf)
+  const campaignMonth = weekOf.slice(0, 7) // YYYY-MM
 
   console.log('='.repeat(60))
   console.log(`SOCIAL POST GENERATOR — ${displayName}`)
   console.log('='.repeat(60))
   console.log(`Brand: ${brand}`)
+  console.log(`Campaign: ${campaign}`)
   console.log(`Count: ${count}`)
   console.log(`Week of: ${weekOf}`)
   console.log(`Platforms: ${platforms.join(', ')}`)
@@ -360,6 +516,7 @@ export async function generateSocialPosts(
   const result: GeneratePostsResult = {
     brand,
     postsCreated: 0,
+    campaign,
     posts: [],
     errors: [],
   }
@@ -369,7 +526,7 @@ export async function generateSocialPosts(
   let postIdeas: AiPostIdea[]
   try {
     const systemPrompt = buildSystemPrompt(brand)
-    const userPrompt = buildUserPrompt(brand, platforms, weekOf, count)
+    const userPrompt = buildUserPrompt(brand, platforms, weekOf, count, campaign)
     const raw = await callGroq(systemPrompt, userPrompt)
     postIdeas = parseAiPostIdeas(raw)
     console.log(`   Generated ${postIdeas.length} post ideas`)
@@ -382,7 +539,7 @@ export async function generateSocialPosts(
 
   // Step 2: Build weekly schedule
   const schedule = buildWeeklySchedule(weekOf, count)
-  console.log(`\n2. Scheduling posts: ${schedule[0]} → ${schedule[schedule.length - 1]}`)
+  console.log(`\n2. Scheduling posts: ${schedule[0]} -> ${schedule[schedule.length - 1]}`)
 
   // Step 3: Process each post idea
   console.log(`\n3. Processing ${postIdeas.length} posts (image search + Strapi push)...`)
@@ -391,41 +548,55 @@ export async function generateSocialPosts(
     const idea = postIdeas[i]
     const platform = platforms[i % platforms.length]
     const scheduled_date = schedule[i] ?? schedule[schedule.length - 1]
-    const overlay_style = OVERLAY_STYLES[i % OVERLAY_STYLES.length]
+    const overlay_style = idea.overlay_style ?? OVERLAY_STYLES[i % OVERLAY_STYLES.length]
 
     console.log(`\n   [${i + 1}/${postIdeas.length}] "${idea.headline}"`)
-    console.log(`   Platform: ${platform} | Date: ${scheduled_date}`)
+    console.log(`   Platform: ${platform} | Date: ${scheduled_date} | Template: ${idea.template}`)
 
     // Search Unsplash for image
     let image_url: string | null = null
+    let image_alt = idea.image_alt ?? ''
     if (idea.image_search_query) {
       console.log(`   Searching Unsplash: "${idea.image_search_query}"`)
-      image_url = await searchUnsplashImage(idea.image_search_query)
-      if (image_url) {
+      const img = await searchUnsplashImage(idea.image_search_query)
+      if (img) {
+        image_url = img.url
+        if (!image_alt) image_alt = img.alt
         console.log(`   Image found: ${image_url.slice(0, 60)}...`)
       } else {
         console.log(`   No image found — posting without image`)
       }
     }
 
-    // Build post data
+    // Build body with hashtags appended for IG
+    let bodyWithHashtags = idea.body
+    if (platform === 'instagram' && idea.hashtags?.length > 0) {
+      // Only append if not already present
+      if (!idea.body.includes('#')) {
+        bodyWithHashtags = `${idea.body}\n\n${idea.hashtags.join(' ')}`
+      }
+    }
+
     const postData: SocialPostData = {
       headline: idea.headline,
-      body: idea.body,
+      body: bodyWithHashtags,
       cta_text: idea.cta_text,
       cta_url: idea.cta_url,
       image_url,
-      overlay_style: idea.overlay_style ?? overlay_style,
+      image_alt,
+      overlay_style,
       template: idea.template ?? 'standard',
       platform,
       brand,
       scheduled_date,
+      campaign_group: campaign,
+      campaign_month: campaignMonth,
       delivery_status: 'pending',
     }
 
-    // Push to Strapi (unless dry run)
     if (dryRun) {
       console.log(`   DRY RUN — would create post in Strapi`)
+      console.log(`   Body preview: ${bodyWithHashtags.slice(0, 120)}...`)
       result.posts.push({
         documentId: `dry-run-${i + 1}`,
         headline: postData.headline,
@@ -435,7 +606,7 @@ export async function generateSocialPosts(
       result.postsCreated++
     } else {
       try {
-        const created = await strapiPost('/api/social-posts', postData as unknown as Record<string, unknown>)
+        const created = await strapiPost('/api/social-posts', { ...postData, publishedAt: null } as unknown as Record<string, unknown>)
         const documentId = created.documentId ?? 'unknown'
         console.log(`   Created in Strapi (documentId: ${documentId})`)
         result.posts.push({
@@ -456,6 +627,7 @@ export async function generateSocialPosts(
   // Summary
   console.log('\n' + '='.repeat(60))
   console.log(`DONE! Created ${result.postsCreated}/${count} posts`)
+  console.log(`Campaign: ${campaign}`)
   if (result.errors.length > 0) {
     console.log(`Errors (${result.errors.length}):`)
     for (const e of result.errors) {
