@@ -63,12 +63,13 @@ interface DimMasterProgramRow {
   master_program_id: number
   master_name: string
   client_id: number | null
+  sales_in_allocation: 'Unit' | 'Pallet' | null
+  sales_out_allocation: 'Unit' | 'Pallet' | null
 }
 
 interface StgInsertRow {
   source_file_name: string
   loaded_at: string
-  user_id: string
   location: string
   master_program: string
   program_code: string
@@ -87,14 +88,21 @@ interface StgInsertRow {
 // ---------------------------------------------------------------------------
 
 /**
- * Account code / ID for Checked-In Qty, which is the primary volume type
- * produced by a standard R1 upload. This matches the dashboard's volume-configs.ts.
+ * Volume type configurations matching dim_account entries.
+ * See migration 20260323000000_reorganize_volume_accounts.sql.
  *
- * account_code: "Checked-In Qty"
- * account_id:   130
+ * Each stage has 3 sub-types:
+ *   - Qty (allocation-based): accountId = base
+ *   - Unit (TRGID count):     accountId = base + 1
+ *   - Pallet (LocationID):    accountId = base + 2
  */
-const CHECKED_IN_ACCOUNT_CODE = 'Checked-In Qty'
-const CHECKED_IN_ACCOUNT_ID = 130
+export const VOLUME_TYPES = {
+  checked_in:    { accountCode: 'Checked-In Qty',       accountId: 130, unitId: 131, palletId: 132, allocationField: 'sales_in_allocation' as const },
+  order_closed:  { accountCode: 'Order Closed Qty',     accountId: 116, unitId: 117, palletId: 118, allocationField: 'sales_out_allocation' as const },
+  ops_complete:  { accountCode: 'Ops Complete Qty',      accountId: 160, unitId: 161, palletId: 162, allocationField: 'sales_in_allocation' as const },
+} as const
+
+export type VolumeType = keyof typeof VOLUME_TYPES
 
 const CHUNK_SIZE = 500
 const PAGE_SIZE = 1000
@@ -187,7 +195,7 @@ async function buildMasterProgramMap(
   while (true) {
     const url =
       `${supabaseUrl}/rest/v1/dim_master_program` +
-      `?select=master_program_id,master_name,client_id` +
+      `?select=master_program_id,master_name,client_id,sales_in_allocation,sales_out_allocation` +
       `&order=master_program_id` +
       `&offset=${offset}&limit=${PAGE_SIZE}`
 
@@ -232,6 +240,10 @@ async function buildMasterProgramMap(
  *
  * Returns { rows, totalRead, skipped, warnings }
  */
+/**
+ * Parse an R1 XLSX using streaming to handle large files (500K+ rows, 181 cols).
+ * Only reads the "Export1" sheet (or first sheet), extracting only the columns we need.
+ */
 async function parseR1Xlsx(filePath: string): Promise<{
   rows: R1Row[]
   totalRead: number
@@ -239,76 +251,113 @@ async function parseR1Xlsx(filePath: string): Promise<{
   warnings: string[]
 }> {
   const warnings: string[] = []
-  const workbook = new ExcelJS.Workbook()
-  await workbook.xlsx.readFile(filePath)
-
-  const worksheet = workbook.worksheets[0]
-  if (!worksheet) {
-    throw new Error(`R1 XLSX has no worksheets: ${filePath}`)
-  }
-
-  // Read header row (row 1)
-  const headerRow = worksheet.getRow(1)
-  const headers: Map<string, number> = new Map()
-  headerRow.eachCell({ includeEmpty: false }, (cell, colNum) => {
-    const val = String(cell.value ?? '').trim()
-    if (val) headers.set(val, colNum)
-  })
-
-  // Resolve required column indices
-  const programCol = headers.get('ProgramName')
-  const masterCol = headers.get('Master Program Name')
-  const trgidCol = headers.get('TRGID')
-
-  if (programCol === undefined || masterCol === undefined || trgidCol === undefined) {
-    throw new Error(
-      `R1 XLSX missing required columns. ` +
-      `Expected: ProgramName, Master Program Name, TRGID. ` +
-      `Found: ${[...headers.keys()].join(', ')}`
-    )
-  }
-
-  // Resolve optional column indices
-  const locationCol = headers.get('LocationID')
-  const retailCol =
-    headers.get('MR_LMR_UPC_AverageCategoryRetail') ??
-    headers.get('RetailPrice') ??
-    headers.get('Retail Price')
-
   const rows: R1Row[] = []
   let totalRead = 0
   let skipped = 0
 
-  worksheet.eachRow({ includeEmpty: false }, (row, rowNum) => {
-    if (rowNum === 1) return // skip header
+  // Column indices (resolved from header row)
+  let programCol = -1
+  let masterCol = -1
+  let trgidCol = -1
+  let locationCol = -1
+  let retailCol = -1
+  let headersResolved = false
+  let foundHeaders: string[] = []
 
-    totalRead++
-
-    const programCode = String(row.getCell(programCol).value ?? '').trim()
-    const masterProgram = String(row.getCell(masterCol).value ?? '').trim()
-    const trgid = String(row.getCell(trgidCol).value ?? '').trim()
-
-    // Skip rows missing the three required values
-    if (!programCode || !masterProgram || !trgid) {
-      skipped++
-      return
-    }
-
-    const locationId = locationCol
-      ? String(row.getCell(locationCol).value ?? '').trim()
-      : ''
-
-    let avgRetail: number | null = null
-    if (retailCol !== undefined) {
-      const rawRetail = row.getCell(retailCol).value
-      if (rawRetail !== null && rawRetail !== undefined && rawRetail !== '') {
-        const parsed = typeof rawRetail === 'number' ? rawRetail : parseFloat(String(rawRetail))
-        if (!isNaN(parsed) && parsed > 0) avgRetail = parsed
-      }
-    }
-
-    rows.push({ programCode, masterProgram, trgid, locationId, avgRetail })
+  const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {
+    entries: 'emit',
+    sharedStrings: 'cache',
+    worksheets: 'emit',
   })
+
+  let sheetFound = false
+
+  for await (const worksheetReader of workbookReader) {
+    const sheetName = String((worksheetReader as any).name ?? '').trim()
+
+    // Only process the "Export1" tab — skip everything else
+    if (sheetName !== 'Export1') {
+      console.error(`  Skipping sheet: "${sheetName}"`)
+      continue
+    }
+
+    console.error(`  Processing sheet: "${sheetName}"`)
+    sheetFound = true
+    {
+
+      for await (const row of worksheetReader) {
+        const rowNum = row.number
+
+        if (rowNum === 1) {
+          // Parse header row
+          row.eachCell({ includeEmpty: false }, (cell: any, colNum: number) => {
+            const val = String(cell.value ?? '').trim()
+            foundHeaders.push(val)
+            switch (val) {
+              case 'ProgramName': programCol = colNum; break
+              case 'Master Program Name': masterCol = colNum; break
+              case 'TRGID': trgidCol = colNum; break
+              case 'LocationID': locationCol = colNum; break
+              case 'MR_LMR_UPC_AverageCategoryRetail':
+              case 'RetailPrice':
+              case 'Retail Price':
+                if (retailCol === -1) retailCol = colNum; break
+            }
+          })
+
+          if (programCol === -1 || masterCol === -1 || trgidCol === -1) {
+            throw new Error(
+              `R1 XLSX missing required columns. ` +
+              `Expected: ProgramName, Master Program Name, TRGID. ` +
+              `Found: ${foundHeaders.slice(0, 20).join(', ')}...`
+            )
+          }
+          headersResolved = true
+          continue
+        }
+
+        if (!headersResolved) continue
+
+        totalRead++
+
+        const programCode = String(row.getCell(programCol).value ?? '').trim()
+        const masterProgram = String(row.getCell(masterCol).value ?? '').trim()
+        const trgid = String(row.getCell(trgidCol).value ?? '').trim()
+
+        if (!programCode || !masterProgram || !trgid) {
+          skipped++
+          continue
+        }
+
+        const locationId = locationCol !== -1
+          ? String(row.getCell(locationCol).value ?? '').trim()
+          : ''
+
+        let avgRetail: number | null = null
+        if (retailCol !== -1) {
+          const rawRetail = row.getCell(retailCol).value
+          if (rawRetail !== null && rawRetail !== undefined && rawRetail !== '') {
+            const parsed = typeof rawRetail === 'number' ? rawRetail : parseFloat(String(rawRetail))
+            if (!isNaN(parsed) && parsed > 0) avgRetail = parsed
+          }
+        }
+
+        rows.push({ programCode, masterProgram, trgid, locationId, avgRetail })
+
+        // Progress logging every 100K rows
+        if (totalRead % 100000 === 0) {
+          console.error(`  ... ${totalRead.toLocaleString()} rows parsed`)
+        }
+      }
+
+    }
+    // Only process one Export1 sheet
+    break
+  }
+
+  if (!sheetFound) {
+    throw new Error(`R1 XLSX has no worksheets: ${filePath}`)
+  }
 
   if (rows.length === 0 && totalRead > 0) {
     warnings.push(
@@ -418,15 +467,17 @@ async function insertBatch(
  *   3. Look up dim_master_program and dim_program_id to resolve FK columns.
  *   4. Insert into stg_financials_raw in batches of 500.
  *
- * @param filePath   Absolute path to the R1 XLSX file on disk.
- * @param userId     The user_id to stamp on each inserted row.
- * @param monthYear  Target month in "YYYY-MM" format (e.g. "2025-10").
- *                   Stored as the `date` column as "YYYY-MM-01".
+ * @param filePath    Absolute path to the R1 XLSX file on disk.
+ * @param userId      The user_id (unused in staging table, kept for CLI compat).
+ * @param monthYear   Target month in "YYYY-MM" format (e.g. "2025-10").
+ * @param volumeType  Volume type key: checked_in | order_closed | ops_complete.
+ *                    Defaults to "checked_in" for backward compatibility.
  */
 export async function processR1Upload(
   filePath: string,
   userId: string,
   monthYear: string,
+  volumeType: VolumeType = 'checked_in',
 ): Promise<R1UploadResult> {
   if (!fs.existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`)
@@ -437,10 +488,16 @@ export async function processR1Upload(
     throw new Error(`monthYear must be in YYYY-MM format (e.g. "2025-10"), got: "${monthYear}"`)
   }
 
+  const volConfig = VOLUME_TYPES[volumeType]
+  if (!volConfig) {
+    throw new Error(`Unknown volume type: "${volumeType}". Valid: ${Object.keys(VOLUME_TYPES).join(', ')}`)
+  }
+
   const sourceFileName = path.basename(filePath)
   const dateStr = `${monthYear}-01`
   const loadedAt = new Date().toISOString()
   const warnings: string[] = []
+  console.error(`  Volume type: ${volumeType} → account_code="${volConfig.accountCode}", account_id=${volConfig.accountId}`)
 
   // -------------------------------------------------------------------------
   // 1. Parse XLSX
@@ -499,25 +556,61 @@ export async function processR1Upload(
     }
 
     const trgidCount = group.trgidSet.size
-    if (trgidCount === 0) continue
+    const locationCount = group.locationIdSet.size
+    if (trgidCount === 0 && locationCount === 0) continue
 
-    insertRows.push({
+    const baseRow = {
       source_file_name: sourceFileName,
       loaded_at: loadedAt,
-      user_id: userId,
       location: group.location,
       master_program: group.masterProgram,
       program_code: group.programCode,
       program_id_key: programIdKeyMap.get(group.programCode) ?? null,
       date: dateStr,
-      account_code: CHECKED_IN_ACCOUNT_CODE,
-      account_id: CHECKED_IN_ACCOUNT_ID,
-      // amount is TEXT in stg_financials_raw — store as string
-      amount: String(trgidCount),
       mode: 'actual',
       master_program_id: masterDim?.master_program_id ?? null,
       client_id: masterDim?.client_id ?? null,
-    })
+    }
+
+    // 1. Unit row (distinct TRGID count)
+    if (trgidCount > 0) {
+      insertRows.push({
+        ...baseRow,
+        account_code: volConfig.accountCode.replace(' Qty', ' Unit Qty'),
+        account_id: volConfig.unitId,
+        amount: String(trgidCount),
+      })
+    }
+
+    // 2. Pallet row (distinct LocationID count)
+    if (locationCount > 0) {
+      insertRows.push({
+        ...baseRow,
+        account_code: volConfig.accountCode.replace(' Qty', ' Pallet Qty'),
+        account_id: volConfig.palletId,
+        amount: String(locationCount),
+      })
+    }
+
+    // 3. Qty row (allocation-based: use TRGID or LocationID per master program)
+    const allocField = volConfig.allocationField
+    const allocation = masterDim?.[allocField] ?? null
+    let qtyCount: number
+    if (allocation === 'Pallet') {
+      qtyCount = locationCount
+    } else {
+      // Default to Unit (TRGID) if allocation is 'Unit', null, or unknown
+      qtyCount = trgidCount
+    }
+
+    if (qtyCount > 0) {
+      insertRows.push({
+        ...baseRow,
+        account_code: volConfig.accountCode,
+        account_id: volConfig.accountId,
+        amount: String(qtyCount),
+      })
+    }
   }
 
   if (unknownMasterPrograms.size > 0) {
