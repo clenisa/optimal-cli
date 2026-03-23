@@ -5,6 +5,8 @@
  * and a wrapCommand helper for Commander action handlers.
  */
 
+import { startTrace, endSpan } from './shared/trace.js'
+
 // ── Error codes ──────────────────────────────────────────────────────────────
 
 export type ErrorCode =
@@ -118,11 +120,16 @@ export function handleError(err: unknown): never {
  */
 export function wrapCommand<A extends unknown[]>(
   fn: (...args: A) => Promise<void>,
+  commandName?: string,
 ): (...args: A) => Promise<void> {
   return async (...args: A) => {
+    const span = startTrace(commandName ?? (fn.name || 'unknown'))
     try {
       await fn(...args)
+      endSpan(span, 'ok')
     } catch (err) {
+      span.attributes['error.message'] = err instanceof Error ? err.message : String(err)
+      endSpan(span, 'error')
       handleError(err)
     }
   }

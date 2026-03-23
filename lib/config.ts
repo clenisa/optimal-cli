@@ -61,6 +61,7 @@ export function saveLocalConfig(config: Record<string, unknown>): void {
  * Push current openclaw.json to Supabase
  */
 export async function pushConfig(agentName: string): Promise<{ id: string; version: string }> {
+  console.warn('DEPRECATED: This config command uses the legacy agent_configs table. Run "optimal sync config migrate" to move to registry v1.');
   const supabase = getOptimalSupabase()
   const config = loadLocalConfig()
   
@@ -117,6 +118,7 @@ export async function pushConfig(agentName: string): Promise<{ id: string; versi
  * Pull config from Supabase and save to local openclaw.json
  */
 export async function pullConfig(agentName: string): Promise<ConfigRecord> {
+  console.warn('DEPRECATED: This config command uses the legacy agent_configs table. Run "optimal sync config migrate" to move to registry v1.');
   const supabase = getOptimalSupabase()
 
   const { data, error } = await supabase
@@ -141,6 +143,7 @@ export async function pullConfig(agentName: string): Promise<ConfigRecord> {
  * List all saved agent configs
  */
 export async function listConfigs(): Promise<Array<{ agent_name: string; version: string; updated_at: string }>> {
+  console.warn('DEPRECATED: This config command uses the legacy agent_configs table. Run "optimal sync config migrate" to move to registry v1.');
   const supabase = getOptimalSupabase()
 
   const { data, error } = await supabase
@@ -163,6 +166,7 @@ export async function diffConfig(agentName: string): Promise<{
   cloud: ConfigRecord | null
   differences: string[]
 }> {
+  console.warn('DEPRECATED: This config command uses the legacy agent_configs table. Run "optimal sync config migrate" to move to registry v1.');
   const local = loadLocalConfig()
   let cloud: ConfigRecord | null = null
   
@@ -212,6 +216,7 @@ export async function syncConfig(agentName: string): Promise<{
   action: 'pushed' | 'pulled' | 'merged' | 'none'
   message: string
 }> {
+  console.warn('DEPRECATED: This config command uses the legacy agent_configs table. Run "optimal sync config migrate" to move to registry v1.');
   const { local, cloud, differences } = await diffConfig(agentName)
 
   if (!local && !cloud) {

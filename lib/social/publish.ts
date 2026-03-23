@@ -19,6 +19,7 @@ import {
   type StrapiPage,
   type StrapiItem,
 } from '../cms/strapi-client.js'
+import { triggerWebhook } from '../infra/webhook.js'
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -50,20 +51,6 @@ export interface PublishResult {
   }>
 }
 
-// ── Config ────────────────────────────────────────────────────────────
-
-function getN8nWebhookUrl(): string {
-  const url = process.env.N8N_WEBHOOK_URL
-  if (!url) {
-    throw new Error(
-      'Missing env var: N8N_WEBHOOK_URL\n' +
-        'Set it in your .env file, e.g.:\n' +
-        '  N8N_WEBHOOK_URL=https://n8n.optimal.miami',
-    )
-  }
-  return url.replace(/\/+$/, '')
-}
-
 // ── Internal helpers ──────────────────────────────────────────────────
 
 /** Trigger n8n webhook for a single social post */
@@ -72,24 +59,15 @@ async function triggerN8nWebhook(
   platform: string,
   brand: string,
 ): Promise<void> {
-  const baseUrl = getN8nWebhookUrl()
-  const webhookUrl = `${baseUrl}/webhook/social-post-publish`
-
-  const res = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ documentId, platform, brand }),
+  const result = await triggerWebhook('/webhook/social-post-publish', {
+    documentId,
+    platform,
+    brand,
   })
 
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}: ${res.statusText}`
-    try {
-      const body = await res.text()
-      if (body) detail += ` — ${body.slice(0, 200)}`
-    } catch {
-      // non-text body, ignore
-    }
-    throw new Error(`n8n webhook failed: ${detail}`)
+  if (!result.ok) {
+    const detail = result.error ?? `HTTP ${result.status}`
+    throw new Error(`n8n webhook failed: ${detail} (attempts: ${result.attempts})`)
   }
 }
 
@@ -176,11 +154,6 @@ export async function publishSocialPosts(
 ): Promise<PublishResult> {
   const { brand, limit, dryRun = false } = opts
 
-  // Validate n8n URL up front (unless dry run)
-  if (!dryRun) {
-    getN8nWebhookUrl()
-  }
-
   const posts = await fetchPostsByStatus(brand, 'pending')
   const postsToProcess = limit !== undefined ? posts.slice(0, limit) : posts
 
@@ -249,9 +222,6 @@ export async function getPublishQueue(brand: string): Promise<QueuedPost[]> {
  *   console.log(`Re-published: ${result.published}, Still failing: ${result.failed}`)
  */
 export async function retryFailed(brand: string): Promise<PublishResult> {
-  // Validate n8n URL up front
-  getN8nWebhookUrl()
-
   const posts = await fetchPostsByStatus(brand, 'failed')
 
   const result: PublishResult = {

@@ -1,15 +1,18 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { join } from 'node:path'
 
 const run = promisify(execFile)
 
+const HOME = process.env.HOME ?? '/home/oracle'
+
 /** Map of short app names to absolute filesystem paths. */
 const APP_PATHS: Record<string, string> = {
-  'dashboard-returnpro': '/home/optimal/dashboard-returnpro',
-  'optimalos': '/home/optimal/optimalos',
-  'portfolio': '/home/optimal/portfolio-2026',
-  'newsletter-preview': '/home/optimal/projects/newsletter-preview',
-  'wes': '/home/optimal/wes-dashboard',
+  'dashboard-returnpro': join(HOME, 'repos', 'dashboard-returnpro'),
+  'optimalos': join(HOME, '.openclaw', 'workspace', 'optimal-cli'),
+  'portfolio': join(HOME, 'repos', 'portfolio-2026'),
+  'newsletter-preview': join(HOME, 'projects', 'newsletter-preview'),
+  'wes': join(HOME, 'repos', 'wes-dashboard'),
 }
 
 /**
@@ -63,7 +66,7 @@ export async function deploy(appName: string, prod = false): Promise<string> {
 export async function healthCheck(): Promise<string> {
   const { stdout } = await run(
     'bash',
-    ['/home/optimal/scripts/health-check.sh'],
+    [join(HOME, 'scripts', 'health-check.sh')],
     { timeout: 30_000 }
   )
   return stdout.trim()

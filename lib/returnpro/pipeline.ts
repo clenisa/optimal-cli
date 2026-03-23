@@ -1,4 +1,5 @@
 import { getSupabase } from '../supabase.js'
+import { triggerWebhook } from '../infra/webhook.js'
 
 export interface PipelineStepResult {
   step: string
@@ -23,25 +24,18 @@ export async function triggerPipeline(options?: {
   steps?: string[]
   poll?: boolean
 }): Promise<PipelineResult> {
-  const webhookBase = process.env.N8N_WEBHOOK_URL
-  if (!webhookBase) {
-    throw new Error('Missing required env var: N8N_WEBHOOK_URL')
-  }
-
   const pipelineId = `rp-${Date.now()}`
   const steps = options?.steps ?? DEFAULT_STEPS
 
   // Fire the webhook — n8n may return immediately (fire-and-forget)
-  const url = `${webhookBase}/webhook/returnpro-pipeline`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pipeline_id: pipelineId, steps }),
+  const result = await triggerWebhook('/webhook/returnpro-pipeline', {
+    pipeline_id: pipelineId,
+    steps,
   })
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '<no body>')
-    throw new Error(`n8n webhook returned ${res.status}: ${body}`)
+  if (!result.ok) {
+    const detail = result.error ?? `HTTP ${result.status}`
+    throw new Error(`n8n webhook failed: ${detail} (attempts: ${result.attempts})`)
   }
 
   // If poll is explicitly false, return immediately with pending steps

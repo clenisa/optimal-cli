@@ -1,6 +1,7 @@
 import { ChannelType, type Guild, type TextChannel, type ThreadChannel } from 'discord.js'
 import { createTask, listTasks, type Task, type TaskStatus } from '../board/index.js'
 import { createMapping, getMappingByTask, getMappingByThread, getMappingByProject, listMappings } from './channels.js'
+import { getSupabase } from '../supabase.js'
 
 export async function createThreadForTask(guild: Guild, task: Task): Promise<ThreadChannel | null> {
   const existing = await getMappingByTask(task.id)
@@ -103,6 +104,35 @@ export async function pushTasksToThreads(
   }
 
   return { created, skipped, errors }
+}
+
+/**
+ * Archive the Discord thread associated with a task when the task is completed.
+ * Looks up the mapping via Supabase and archives if the thread is still active.
+ */
+export async function archiveThreadForTask(guild: Guild, taskId: string): Promise<boolean> {
+  const supabase = getSupabase('optimal')
+  const { data: mapping } = await supabase
+    .from('discord_mappings')
+    .select('discord_channel_id, discord_thread_id')
+    .eq('task_id', taskId)
+    .not('discord_thread_id', 'is', null)
+    .single()
+
+  if (!mapping) return false
+
+  try {
+    const channel = await guild.channels.fetch(mapping.discord_channel_id)
+    if (!channel || !channel.isTextBased()) return false
+    const thread = await (channel as TextChannel).threads.fetch(mapping.discord_thread_id)
+    if (thread && !thread.archived) {
+      await thread.setArchived(true, 'Task completed')
+      return true
+    }
+  } catch {
+    return false
+  }
+  return false
 }
 
 export async function createTaskFromThread(

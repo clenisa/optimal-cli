@@ -14,6 +14,11 @@ export interface ChannelMapping {
   updated_at: string
 }
 
+export interface OrphanedMapping {
+  mapping: ChannelMapping
+  reason: 'channel_deleted' | 'thread_deleted' | 'fetch_failed'
+}
+
 export async function listMappings(opts?: { project_id?: string; task_id?: string }): Promise<ChannelMapping[]> {
   let query = sb().from('discord_mappings').select('*')
   if (opts?.project_id) query = query.eq('project_id', opts.project_id)
@@ -140,4 +145,57 @@ export async function initProjectChannels(guild: Guild, dryRun = false): Promise
   }
 
   return { created, existing }
+}
+
+/**
+ * Detect orphaned mappings — entries in discord_mappings that point to
+ * threads or channels that no longer exist in Discord.
+ */
+export async function findOrphanedMappings(guild: Guild): Promise<OrphanedMapping[]> {
+  const { data: mappings } = await sb()
+    .from('discord_mappings')
+    .select('*')
+    .not('discord_thread_id', 'is', null)
+
+  if (!mappings) return []
+
+  const orphans: OrphanedMapping[] = []
+  for (const mapping of mappings) {
+    try {
+      const channel = await guild.channels.fetch(mapping.discord_channel_id)
+      if (!channel || !channel.isTextBased()) {
+        orphans.push({ mapping: mapping as ChannelMapping, reason: 'channel_deleted' })
+        continue
+      }
+      // Check if thread exists in active threads
+      const threads = await (channel as TextChannel).threads.fetch()
+      const threadExists = threads.threads.has(mapping.discord_thread_id)
+      if (!threadExists) {
+        // Also check archived threads
+        const archived = await (channel as TextChannel).threads.fetchArchived()
+        if (!archived.threads.has(mapping.discord_thread_id)) {
+          orphans.push({ mapping: mapping as ChannelMapping, reason: 'thread_deleted' })
+        }
+      }
+    } catch {
+      orphans.push({ mapping: mapping as ChannelMapping, reason: 'fetch_failed' })
+    }
+  }
+  return orphans
+}
+
+/**
+ * Delete orphaned mappings from Supabase. Returns the number of
+ * successfully cleaned entries.
+ */
+export async function cleanupOrphanedMappings(orphans: OrphanedMapping[]): Promise<number> {
+  let cleaned = 0
+  for (const orphan of orphans) {
+    const { error } = await sb()
+      .from('discord_mappings')
+      .delete()
+      .eq('id', orphan.mapping.id)
+    if (!error) cleaned++
+  }
+  return cleaned
 }

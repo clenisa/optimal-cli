@@ -11,6 +11,7 @@
 
 import 'dotenv/config'
 import { strapiGet, strapiPut } from '../cms/strapi-client.js'
+import { triggerWebhook } from '../infra/webhook.js'
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -42,20 +43,6 @@ interface NewsletterData {
   delivery_errors?: unknown[] | null
   brand?: string
   [key: string]: unknown
-}
-
-// ── Environment helpers ───────────────────────────────────────────────
-
-function getWebhookUrl(): string {
-  const url = process.env.N8N_WEBHOOK_URL
-  if (!url) {
-    throw new Error(
-      'Missing env var: N8N_WEBHOOK_URL\n' +
-        'Set it to your n8n base URL, e.g. https://n8n.optimal.miami\n' +
-        'The distribute module will POST to: $N8N_WEBHOOK_URL/webhook/newsletter-distribute',
-    )
-  }
-  return url.replace(/\/+$/, '')
 }
 
 // ── 1. Distribute Newsletter ──────────────────────────────────────────
@@ -139,69 +126,35 @@ export async function distributeNewsletter(
   }
 
   // Step 5: Trigger n8n webhook
-  const webhookUrl = getWebhookUrl()
-  const webhookEndpoint = `${webhookUrl}/webhook/newsletter-distribute`
   const brand = typeof newsletter.brand === 'string' ? newsletter.brand : ''
 
-  let webhookResponse: unknown
-  try {
-    const res = await fetch(webhookEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documentId, brand, channel }),
-    })
+  const webhookResult = await triggerWebhook('/webhook/newsletter-distribute', {
+    documentId,
+    brand,
+    channel,
+  })
 
-    if (!res.ok) {
-      let body: unknown
-      try {
-        body = await res.json()
-      } catch {
-        body = await res.text().catch(() => res.statusText)
-      }
-
-      // Webhook failed — update Strapi to 'failed' with error details
-      const errorDetails = [
-        { step: 'webhook', status: res.status, body },
-      ]
-      await strapiPut('/api/newsletters', documentId, {
-        delivery_status: 'failed',
-        delivery_errors: errorDetails,
-      }).catch(() => {
-        // Best-effort update — don't mask the original error
-      })
-
-      return {
-        success: false,
-        documentId,
-        channel,
-        error: `n8n webhook returned ${res.status}: ${JSON.stringify(body)}`,
-      }
-    }
-
-    try {
-      webhookResponse = await res.json()
-    } catch {
-      webhookResponse = { status: res.status }
-    }
-  } catch (err) {
-    // Network/connection error
-    const msg = err instanceof Error ? err.message : String(err)
-    const errorDetails = [{ step: 'webhook', error: msg }]
-
+  if (!webhookResult.ok) {
+    const errorMsg = webhookResult.error ?? `HTTP ${webhookResult.status}`
+    const errorDetails = [
+      { step: 'webhook', status: webhookResult.status, error: errorMsg, attempts: webhookResult.attempts },
+    ]
     await strapiPut('/api/newsletters', documentId, {
       delivery_status: 'failed',
       delivery_errors: errorDetails,
     }).catch(() => {
-      // Best-effort
+      // Best-effort update — don't mask the original error
     })
 
     return {
       success: false,
       documentId,
       channel,
-      error: `n8n webhook request failed: ${msg}`,
+      error: `n8n webhook failed: ${errorMsg} (attempts: ${webhookResult.attempts})`,
     }
   }
+
+  const webhookResponse = webhookResult.body
 
   // Step 6: Webhook succeeded — return success
   // Note: n8n will update delivery_status to 'delivered' (or 'partial') via its

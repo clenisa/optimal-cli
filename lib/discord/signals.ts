@@ -2,6 +2,27 @@ import type { MessageReaction, User, Message, Guild } from 'discord.js'
 import { updateTask, claimTask, addComment, type TaskStatus, type UpdateTaskInput } from '../board/index.js'
 import { getMappingByThread } from './channels.js'
 
+/**
+ * Retry wrapper for Discord API calls that handles 429 rate-limit responses.
+ * Waits for the duration specified by Discord's `retryAfter` header before retrying.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn()
+    } catch (err: any) {
+      if (err?.status === 429 && attempt < maxRetries) {
+        const retryAfter = (err.retryAfter ?? 1) * 1000
+        console.warn(`Discord rate limited, retrying in ${retryAfter}ms (attempt ${attempt}/${maxRetries})...`)
+        await new Promise(r => setTimeout(r, retryAfter))
+        continue
+      }
+      throw err
+    }
+  }
+  throw new Error('withRetry: exhausted all attempts')
+}
+
 const REACTION_MAP: Record<string, TaskStatus> = {
   '👋': 'claimed',
   '🔄': 'in_progress',
@@ -57,7 +78,7 @@ export async function handleReaction(
   const channel = reaction.message.channel
   if (channel.isThread()) {
     const statusLabel = newStatus === 'claimed' ? `claimed by ${actor}` : newStatus.replace('_', ' ')
-    await channel.send(`Task ${statusLabel} -- ${actor}`)
+    await withRetry(() => channel.send(`Task ${statusLabel} -- ${actor}`))
   }
 
   return true
@@ -83,7 +104,7 @@ export async function handleTextCommand(message: Message): Promise<boolean> {
       const validStatuses: TaskStatus[] = ['backlog', 'ready', 'claimed', 'in_progress', 'review', 'done', 'blocked']
       const status = arg.toLowerCase().replace(' ', '_') as TaskStatus
       if (!validStatuses.includes(status)) {
-        await message.reply(`Invalid status. Use: ${validStatuses.join(', ')}`)
+        await withRetry(() => message.reply(`Invalid status. Use: ${validStatuses.join(', ')}`))
         return true
       }
       const updates: UpdateTaskInput = { status }
@@ -93,34 +114,34 @@ export async function handleTextCommand(message: Message): Promise<boolean> {
       } else {
         await updateTask(mapping.task_id, updates, actor)
       }
-      await message.reply(`Status -> ${status}`)
+      await withRetry(() => message.reply(`Status -> ${status}`))
       return true
     }
 
     case '!assign': {
       if (!arg) {
-        await message.reply('Usage: !assign <agent>')
+        await withRetry(() => message.reply('Usage: !assign <agent>'))
         return true
       }
       await updateTask(mapping.task_id, { assigned_to: arg }, actor)
-      await message.reply(`Assigned -> ${arg}`)
+      await withRetry(() => message.reply(`Assigned -> ${arg}`))
       return true
     }
 
     case '!priority': {
       const p = parseInt(arg)
       if (isNaN(p) || p < 1 || p > 4) {
-        await message.reply('Usage: !priority 1-4')
+        await withRetry(() => message.reply('Usage: !priority 1-4'))
         return true
       }
       await updateTask(mapping.task_id, { priority: p as 1 | 2 | 3 | 4 }, actor)
-      await message.reply(`Priority -> P${p}`)
+      await withRetry(() => message.reply(`Priority -> P${p}`))
       return true
     }
 
     case '!note': {
       if (!arg) {
-        await message.reply('Usage: !note <text>')
+        await withRetry(() => message.reply('Usage: !note <text>'))
         return true
       }
       await addComment({
@@ -128,7 +149,7 @@ export async function handleTextCommand(message: Message): Promise<boolean> {
         author: actor,
         body: arg,
       })
-      await message.reply('Note saved.')
+      await withRetry(() => message.reply('Note saved.'))
       return true
     }
 

@@ -1,7 +1,7 @@
 import { ChannelType, type Guild, type TextChannel } from 'discord.js'
 import { listTasks, updateTask, type Task, type TaskStatus } from '../board/index.js'
-import { listMappings, getMappingByTask, type ChannelMapping } from '../discord/channels.js'
-import { createTaskFromThread, archiveThread } from '../discord/threads.js'
+import { listMappings, getMappingByTask, type ChannelMapping } from './channels.js'
+import { createTaskFromThread, archiveThread } from './threads.js'
 
 export interface SyncDiff {
   inSupabaseOnly: Task[]
@@ -98,7 +98,7 @@ export async function pullDiscordToSupabase(
   // Reconcile status mismatches
   for (const mismatch of diff.statusMismatch) {
     if (mismatch.threadArchived && mismatch.task.status !== 'done') {
-      // Thread archived but task active — archive means done in Discord-as-source-of-truth
+      // Thread archived but task active -- archive means done in Discord-as-source-of-truth
       if (dryRun) {
         console.log(`[dry-run] Would mark done: "${mismatch.task.title}" (thread archived)`)
       } else {
@@ -112,7 +112,7 @@ export async function pullDiscordToSupabase(
       }
       updated++
     } else if (!mismatch.threadArchived && (mismatch.task.status === 'done' || mismatch.task.status === 'backlog')) {
-      // Task done but thread still active — archive the thread to match
+      // Task done but thread still active -- archive the thread to match
       if (dryRun) {
         console.log(`[dry-run] Would archive thread for: "${mismatch.task.title}" (task done)`)
       } else {
@@ -131,6 +131,9 @@ export async function pullDiscordToSupabase(
   return { created, updated, errors }
 }
 
+/**
+ * Format sync diff with actionable fix commands for each mismatch type.
+ */
 export function formatSyncDiff(diff: SyncDiff): string {
   const lines: string[] = []
 
@@ -139,6 +142,7 @@ export function formatSyncDiff(diff: SyncDiff): string {
     for (const t of diff.inSupabaseOnly) {
       lines.push(`  - ${t.title} [${t.status}]`)
     }
+    lines.push(`  Fix: optimal sync discord:push`)
   }
 
   if (diff.inDiscordOnly.length > 0) {
@@ -146,6 +150,7 @@ export function formatSyncDiff(diff: SyncDiff): string {
     for (const t of diff.inDiscordOnly) {
       lines.push(`  - ${t.name}`)
     }
+    lines.push(`  Fix: optimal sync discord:pull`)
   }
 
   if (diff.statusMismatch.length > 0) {
@@ -153,6 +158,11 @@ export function formatSyncDiff(diff: SyncDiff): string {
     for (const m of diff.statusMismatch) {
       const threadState = m.threadArchived ? 'archived' : 'active'
       lines.push(`  - ${m.task.title}: task=${m.task.status}, thread=${threadState}`)
+      if (m.threadArchived && m.task.status !== 'done') {
+        lines.push(`    Fix: optimal board update --id ${m.task.id} --status done`)
+      } else if (!m.threadArchived && (m.task.status === 'done' || m.task.status === 'backlog')) {
+        lines.push(`    Fix: optimal board update --id ${m.task.id} --status ${m.task.status === 'done' ? 'in_progress' : 'ready'}`)
+      }
     }
   }
 

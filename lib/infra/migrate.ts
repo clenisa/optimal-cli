@@ -26,10 +26,12 @@ export interface MigrateResult {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Hardcoded project directories — these live on Carlos's machine. */
+const HOME = process.env.HOME ?? '/home/oracle'
+
+/** Project directories resolved from HOME. */
 const PROJECT_DIRS: Record<'returnpro' | 'optimalos', string> = {
-  returnpro: '/home/optimal/dashboard-returnpro',
-  optimalos: '/home/oracle/.openclaw/workspace/optimal-cli',
+  returnpro: join(HOME, 'repos', 'dashboard-returnpro'),
+  optimalos: join(HOME, '.openclaw', 'workspace', 'optimal-cli'),
 }
 
 // ---------------------------------------------------------------------------

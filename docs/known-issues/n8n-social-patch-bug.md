@@ -37,3 +37,15 @@ Also check **"PATCH: Scheduled"** node for the same issue.
 - Posts publish to IG/FB successfully — end users see them
 - Strapi never records delivery — `delivery_status` stays "pending" or "scheduled"
 - CLI `social-queue` may re-queue already-published posts
+
+## Verification
+After fixing, publish a test social post and check Strapi:
+```bash
+optimal content social publish --brand OPTIMAL
+# Then check delivery status
+optimal content social queue --brand OPTIMAL
+```
+
+## Status
+- [x] Documented (2026-03-22)
+- [ ] Fixed in n8n
