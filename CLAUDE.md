@@ -90,9 +90,10 @@ Multi-agent coordination system with pull-based task claiming:
 
 ### Content Pipeline (`lib/cms/`, `lib/newsletter/`, `lib/social/`)
 
-Two brands: `CRE-11TRUST` (ElevenTrust CRE) and `LIFEINSUR` (Anchor Point Insurance).
+Three brands: `CRE-11TRUST` (ElevenTrust CRE), `LIFEINSUR` (Anchor Point Insurance), `OPTIMAL` (Optimal Tech Corp).
 
 **Flow**: Groq AI generates content → Strapi CMS stores as draft → n8n webhooks handle distribution.
+**Preview**: Strapi preview enabled for social posts at `/api/social-posts/preview/:documentId?status=draft&secret=anchor-preview-2026`
 
 - Strapi v5 uses `documentId` (UUID), not numeric `id`, for all mutations
 - `strapiPost`/`strapiPut` auto-wrap body in `{ data: ... }`
@@ -101,6 +102,10 @@ Two brands: `CRE-11TRUST` (ElevenTrust CRE) and `LIFEINSUR` (Anchor Point Insura
 - Social post platform assignment cycles via `platforms[i % platforms.length]`
 - `meta.ts` calls Meta Graph API v21.0 directly (bypasses n8n) for Instagram publishing
 - Distribution status is terminal from CLI's perspective — n8n writes final `delivery_status` back to Strapi
+- **Groq quality limitation**: Llama 3.3 70B produces generic copy. Task on kanban to upgrade to Claude Sonnet via AI Gateway (~$0.60 per 12-post campaign)
+- **LIFEINSUR brand config** in `post-generator.ts` needs richer voice/anti-patterns (currently thin vs OPTIMAL's detailed config)
+- **Strapi CSP**: `config/middlewares.ts` whitelists `images.unsplash.com` for social post image previews
+- **Meta API not yet connected** for LIFEINSUR — task on kanban (P1) to connect via Graph API Explorer
 
 ### Kanban Sync (`lib/kanban/sync.ts`)
 
@@ -131,24 +136,52 @@ Registry v1 has structured schema validation (`OptimalConfigV1`), SHA-256 hash c
 ## Return Pro Upload Workflow
 
 ### Monthly Close Workflow
-1. Download dim export from NetSuite → `MasterProgramProgramResults56.xls`
-2. `optimal sync-dims --file <path> [--execute]` — Sync dim tables from NetSuite export (dry-run by default)
-3. `optimal preflight --month YYYY-MM [--income-statement <path>]` — Pre-template validation
-4. `optimal generate-netsuite-template --output <path>` — Generate blank XLSX template
-5. Open in Excel → NetSuite add-in → Solution7 formulas populate → Save as .xlsm
-6. `optimal upload-netsuite --file <path> --user-id <uuid>` — Upload XLSM/XLSX/CSV to stg_financials_raw
-7. `optimal upload-income-statements --file <path> --user-id <uuid>` — Upload confirmed income statement CSV
-8. `optimal audit-financials --months YYYY-MM` — Compare staging vs confirmed (accuracy %)
-9. `optimal diagnose-months --months YYYY-MM` — Check FK resolution and data gaps
-10. `optimal run-pipeline [--month YYYY-MM]` — Trigger n8n audit/anomaly/dims pipeline
+1. Upload files to Pi via `optimal.miami` transfer panel (Ctrl+Shift+U)
+2. Download dim export from NetSuite → `MasterProgramProgramResults56.xls`
+3. `optimal finance sync-dims --file <path> [--execute]` — Sync dim tables (dry-run by default)
+4. `optimal finance preflight --month YYYY-MM [--income-statement <path>]` — Pre-template validation
+5. `optimal finance template --output <path>` — Generate blank XLSX template
+6. Open in Excel → NetSuite add-in → Solution7 formulas populate → Save as .xlsm
+7. `optimal finance upload --file <path> --user-id <uuid>` — Upload XLSM/XLSX/CSV to stg_financials_raw
+8. `optimal finance upload-confirmed --file <path> --user-id <uuid>` — Upload confirmed income statement CSV
+9. Upload R1 volumes (one command per file, extracts unit/pallet/qty automatically):
+   ```bash
+   optimal finance upload-r1 --file <check-in.xlsx> --user-id <uuid> --month YYYY-MM --volume-type checked_in
+   optimal finance upload-r1 --file <orders-closed.xlsx> --user-id <uuid> --month YYYY-MM --volume-type order_closed
+   optimal finance upload-r1 --file <ops-complete.xlsx> --user-id <uuid> --month YYYY-MM --volume-type ops_complete
+   ```
+10. `optimal finance audit --months YYYY-MM` — Compare staging vs confirmed (accuracy %)
+11. `optimal finance diagnose --months YYYY-MM` — Check FK resolution and data gaps
+12. `optimal finance pipeline [--month YYYY-MM]` — Trigger n8n audit/anomaly/dims pipeline
 
-Or use the guided workflow: `optimal month-close --month YYYY-MM`
+Or use the guided workflow: `optimal finance month-close --month YYYY-MM`
+
+### R1 Volume Upload Details
+- `upload-r1` uses **streaming XLSX parser** (handles 549K+ rows, 181 columns without OOM)
+- Targets **Export1 sheet by name** (skips pivot/lookup tabs)
+- Each file produces **3 insert sets per program group**: Unit (TRGID count), Pallet (LocationID count), Qty (allocation-based per master program)
+- `--volume-type` maps to dim_account: checked_in (130-132), order_closed (116-118), ops_complete (160-162)
+- INSERT only — re-uploading creates duplicates; delete old batch first
+- `stg_financials_raw` has no `user_id` column — `--user-id` is accepted but unused
+
+### Volume Account Matrix
+| Stage | Qty (allocation) | Unit (TRGID) | Pallet (LocationID) |
+|-------|-----------------|-------------|-------------------|
+| Checked-In | 130 | 131 | 132 |
+| Order Closed | 116 | 117 | 118 |
+| Ops Complete | 160 | 161 | 162 |
+| Processed (derived) | 119 | — | — |
+
+- **Sold = Order Closed** (R1 terminology, renamed in migration 20260323000000)
+- **Processed = Ops Complete + per-MP adjustments** (derived, not a raw R1 volume)
 
 ### Upload Notes
 - `sync-dims` parses NetSuite XML Spreadsheet exports (.xls SpreadsheetML format)
 - Program sources: `netsuite` (operational, LOCATION-CLIENT pattern) vs `fpa` (budgeting entries)
 - `preflight` checks dim coverage against income statement before template generation
 - `run-pipeline` triggers n8n ReturnPro pipeline (audit → anomaly scan → dims check → notify)
+- `upload-netsuite` is INSERT-only — must delete old batch before re-uploading or totals double
+- `"- None -"` is a valid master program (mp_id=1) — not in NetSuite export but has staging data
 
 ## Skills Format
 
