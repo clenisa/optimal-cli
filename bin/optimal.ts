@@ -115,6 +115,10 @@ import {
   listRegisteredBots,
 } from '../lib/bot-sync/index.js'
 import { getSupabase } from '../lib/supabase.js'
+import { wrapCommand } from '../lib/errors.js'
+import {
+  getPipelineStatus, generatePost, approvePost, listPosts,
+} from '../lib/content/pipeline.js'
 import { execFileSync } from 'node:child_process'
 
 // Dynamic version from package.json (works in published package)
@@ -652,10 +656,16 @@ Subcommands:
   content blog publish            Publish a Strapi blog post
   content blog drafts             List unpublished drafts
   content scrape-ads              Scrape Meta Ad Library
+  content pipeline status         Show pipeline status (scraped/insights/posts)
+  content pipeline generate       Generate AI post from latest insight
+  content pipeline approve        Approve a draft post for Strapi sync
+  content pipeline list           List generated posts with filters
 
 Examples:
   $ optimal content newsletter generate --brand CRE-11TRUST
   $ optimal content social generate --brand OPTIMAL --count 9
+  $ optimal content pipeline status
+  $ optimal content pipeline generate --platform twitter
   $ optimal content blog publish --slug my-post --deploy
   $ optimal content scrape-ads --companies "Company A,Company B"
 `)
@@ -685,6 +695,102 @@ contentBlog.command('publish').description('Publish a Strapi blog post and optio
 contentBlog.command('drafts').description('List unpublished blog post drafts').option('--site <site>', 'Filter by site (portfolio, insurance)').action(async (opts: { site?: string }) => { try { const drafts = await listBlogDrafts(opts.site); if (drafts.length === 0) { console.log('No drafts found'); return } console.log('| Created | Site | Title | Slug |'); console.log('|---------|------|-------|------|'); for (const d of drafts) { console.log(`| ${d.createdAt.slice(0, 10)} | ${d.site} | ${d.title} | ${d.slug} |`) } } catch (err) { const msg = err instanceof Error ? err.message : String(err); fmtError(`Failed to fetch blog drafts: ${msg}`); process.exit(1) } })
 
 content.command('scrape-ads').description('Scrape Meta Ad Library for competitor ad intelligence').requiredOption('--companies <csv-or-file>', 'Comma-separated company names or path to a text file (one per line)').option('--output <path>', 'Save CSV results to file (default: stdout)').option('--batch-size <n>', 'Companies per batch', '6').action(async (opts: { companies: string; output?: string; batchSize: string }) => { let companies: string[]; if (existsSync(opts.companies)) { const raw = readFileSync(opts.companies, 'utf-8'); companies = raw.split('\n').map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith('#')) } else { companies = opts.companies.split(',').map((c) => c.trim()).filter((c) => c.length > 0) } if (companies.length === 0) { console.error('No companies specified'); process.exit(1) } const batchSize = parseInt(opts.batchSize); if (isNaN(batchSize) || batchSize < 1) { console.error('Invalid batch size'); process.exit(1) } try { const result = await scrapeCompanies({ companies, outputPath: opts.output, batchSize }); if (!opts.output) { process.stdout.write(formatCsv(result.ads)) } } catch (err) { const msg = err instanceof Error ? err.message : String(err); console.error(`Scrape failed: ${msg}`); process.exit(1) } })
+
+// ── Content Pipeline subcommands ────────────────────────────────────
+
+const contentPipeline = content.command('pipeline').description('Content research pipeline: status, generate, approve, list')
+  .addHelpText('after', `
+Subcommands:
+  content pipeline status                      Show pipeline status
+  content pipeline generate --platform twitter  Generate a post via AI
+  content pipeline approve --id <uuid>          Approve a draft post
+  content pipeline list [--status draft]        List generated posts
+
+Examples:
+  $ optimal content pipeline status
+  $ optimal content pipeline generate --platform facebook --topic openclaw
+  $ optimal content pipeline approve --id abc123
+  $ optimal content pipeline list --status draft --platform twitter
+`)
+
+contentPipeline.command('status').description('Show content pipeline status: scraped items, insights, posts, campaign').action(wrapCommand(async () => {
+  const status = await getPipelineStatus()
+
+  console.log(colorize('\n  Content Pipeline Status', 'bold'))
+  console.log(colorize('  ══════════════════════════════════════', 'dim'))
+
+  console.log(`\n  ${colorize('Scraped Items', 'cyan')}`)
+  console.log(`    Last 24h: ${colorize(String(status.scrapedItems.last24h), 'bold')}`)
+  console.log(`    Total:    ${colorize(String(status.scrapedItems.total), 'bold')}`)
+
+  console.log(`\n  ${colorize('Insights', 'cyan')}`)
+  console.log(`    Last 7d:  ${colorize(String(status.insights.last7d), 'bold')}`)
+  console.log(`    Total:    ${colorize(String(status.insights.total), 'bold')}`)
+
+  console.log(`\n  ${colorize('Generated Posts', 'cyan')}`)
+  console.log(`    Draft:    ${colorize(String(status.generatedPosts.draft), 'yellow')}`)
+  console.log(`    Approved: ${colorize(String(status.generatedPosts.approved), 'blue')}`)
+  console.log(`    Posted:   ${colorize(String(status.generatedPosts.posted), 'green')}`)
+  console.log(`    Failed:   ${colorize(String(status.generatedPosts.failed), 'red')}`)
+  console.log(`    Total:    ${colorize(String(status.generatedPosts.total), 'bold')}`)
+
+  if (status.campaign) {
+    console.log(`\n  ${colorize('Campaign', 'cyan')}`)
+    console.log(`    Name:   ${colorize(status.campaign.name, 'bold')}`)
+    console.log(`    Topic:  ${status.campaign.topic}`)
+    console.log(`    Status: ${statusBadge(status.campaign.status)}`)
+    console.log(`    ID:     ${colorize(status.campaign.id, 'dim')}`)
+  }
+
+  console.log()
+}, 'content-pipeline-status'))
+
+contentPipeline.command('generate').description('Generate an AI post for a platform from latest insight').requiredOption('--platform <platform>', 'Platform: twitter or facebook').option('--topic <topic>', 'Topic to generate for', 'openclaw').action(wrapCommand(async (opts: { platform: string; topic: string }) => {
+  if (!['twitter', 'facebook'].includes(opts.platform)) {
+    fmtError('Platform must be "twitter" or "facebook"')
+    process.exit(1)
+  }
+
+  fmtInfo(`Generating ${opts.platform} post for topic "${opts.topic}"...`)
+  const post = await generatePost({ platform: opts.platform as 'twitter' | 'facebook', topic: opts.topic })
+
+  success(`Post generated (${post.platform})`)
+  console.log(colorize(`\n  ID: ${post.id}`, 'dim'))
+  console.log(colorize('  ────────────────────────────────────', 'dim'))
+  console.log(`  ${post.content}`)
+  console.log(colorize('  ────────────────────────────────────', 'dim'))
+  console.log(`  Status: ${statusBadge(post.status)} | Model: ${post.model_used}\n`)
+}, 'content-pipeline-generate'))
+
+contentPipeline.command('approve').description('Approve a draft post for Strapi sync').requiredOption('--id <uuid>', 'Post UUID to approve').action(wrapCommand(async (opts: { id: string }) => {
+  await approvePost(opts.id)
+  success(`Post ${opts.id} approved`)
+}, 'content-pipeline-approve'))
+
+contentPipeline.command('list').description('List generated posts with optional filters').option('--status <status>', 'Filter by status: draft, approved, posted, failed').option('--platform <platform>', 'Filter by platform: twitter, facebook').option('--limit <n>', 'Max posts to return', '20').action(wrapCommand(async (opts: { status?: string; platform?: string; limit: string }) => {
+  const posts = await listPosts({
+    status: opts.status,
+    platform: opts.platform,
+    limit: parseInt(opts.limit),
+  })
+
+  if (posts.length === 0) {
+    fmtInfo('No posts found matching filters')
+    return
+  }
+
+  const headers = ['Created', 'Platform', 'Status', 'Content Preview', 'ID']
+  const rows = posts.map(p => [
+    p.created_at?.slice(0, 16).replace('T', ' ') ?? '',
+    p.platform,
+    p.status,
+    (p.content || '').substring(0, 50) + ((p.content || '').length > 50 ? '...' : ''),
+    p.id.substring(0, 8),
+  ])
+
+  console.log(fmtTable(headers, rows))
+  console.log(`  ${posts.length} post(s) found\n`)
+}, 'content-pipeline-list'))
 
 
 // ═══════════════════════════════════════════════════════════════════════

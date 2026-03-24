@@ -1,10 +1,10 @@
 {
-    "updatedAt": "2026-03-24T18:30:51.581Z",
+    "updatedAt": "2026-03-24T19:09:29.504Z",
     "createdAt": "2026-03-24T18:30:51.581Z",
     "id": "spYWTTqvcdqScE0d",
     "name": "Content Pipeline \u2014 Topic Monitor",
     "description": null,
-    "active": false,
+    "active": true,
     "isArchived": false,
     "nodes": [
         {
@@ -70,132 +70,16 @@
             }
         },
         {
-            "id": "parse-rss-items",
-            "name": "Parse RSS Items",
+            "id": "parse-and-dedup",
+            "name": "Parse, Dedup & Insert",
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [
-                680,
+                700,
                 300
             ],
             "parameters": {
-                "jsCode": "// Parse RSS XML from both GitHub feeds\nconst items = [];\n\nfor (const input of $input.all()) {\n  const xml = input.json.data || input.json.body || '';\n  const xmlStr = typeof xml === 'string' ? xml : JSON.stringify(xml);\n  \n  // Simple XML item extraction\n  const itemRegex = /<item>(.*?)<\\/item>/gs;\n  let match;\n  \n  while ((match = itemRegex.exec(xmlStr)) !== null) {\n    const itemXml = match[1];\n    const getTag = (tag) => {\n      const m = itemXml.match(new RegExp(`<${tag}>(.*?)<\\/${tag}>`, 's'));\n      return m ? m[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, '').trim() : null;\n    };\n    \n    const title = getTag('title');\n    const link = getTag('link');\n    const description = getTag('description');\n    const pubDate = getTag('pubDate');\n    \n    // Determine source from URL\n    const source = link && link.includes('github.com') ? 'github' : 'rss';\n    const sourceAccount = 'anthropics';\n    \n    items.push({\n      json: {\n        source: source,\n        source_url: link,\n        source_account: sourceAccount,\n        topic: 'openclaw',\n        title: title,\n        content: description || title || 'No content',\n        raw_json: { title, link, description, pubDate },\n        scraped_at: new Date().toISOString()\n      }\n    });\n  }\n}\n\n// Deduplicate by source_url\nconst seen = new Set();\nconst unique = items.filter(item => {\n  if (seen.has(item.json.source_url)) return false;\n  seen.add(item.json.source_url);\n  return true;\n});\n\nreturn unique.length > 0 ? unique : [{ json: { _empty: true, message: 'No items parsed' } }];"
-            }
-        },
-        {
-            "id": "filter-empty",
-            "name": "Filter Empty",
-            "type": "n8n-nodes-base.filter",
-            "typeVersion": 2,
-            "position": [
-                900,
-                300
-            ],
-            "parameters": {
-                "conditions": {
-                    "options": {
-                        "caseSensitive": true,
-                        "leftValue": "",
-                        "typeValidation": "strict"
-                    },
-                    "combinator": "and",
-                    "conditions": [
-                        {
-                            "id": "filter-empty-check",
-                            "leftValue": "={{ $json._empty }}",
-                            "rightValue": true,
-                            "operator": {
-                                "type": "boolean",
-                                "operation": "notTrue"
-                            }
-                        }
-                    ]
-                }
-            }
-        },
-        {
-            "id": "check-duplicate",
-            "name": "Check Duplicate",
-            "type": "n8n-nodes-base.httpRequest",
-            "typeVersion": 4.2,
-            "position": [
-                1120,
-                300
-            ],
-            "parameters": {
-                "url": "=<OPTIMAL_SUPABASE_URL>/rest/v1/content_scraped_items?source_url=eq.{{ encodeURIComponent($json.source_url) }}&select=id&limit=1",
-                "method": "GET",
-                "sendHeaders": true,
-                "headerParameters": {
-                    "parameters": [
-                        {
-                            "name": "apikey",
-                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
-                        },
-                        {
-                            "name": "Authorization",
-                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
-                        }
-                    ]
-                },
-                "options": {
-                    "response": {
-                        "response": {
-                            "responseFormat": "json"
-                        }
-                    }
-                }
-            }
-        },
-        {
-            "id": "filter-new-only",
-            "name": "Filter New Only",
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [
-                1340,
-                300
-            ],
-            "parameters": {
-                "jsCode": "// Only keep items where the duplicate check returned empty array\nconst results = [];\nfor (const item of $input.all()) {\n  const data = item.json;\n  // The HTTP response body is in .data or direct - check for empty array\n  const existing = Array.isArray(data) ? data : (data.data || data);\n  if (Array.isArray(existing) && existing.length === 0) {\n    // Not a duplicate - pass through the original scraped item\n    // We need to get it from the previous node's data stored in the item\n    results.push(item);\n  }\n}\nreturn results.length > 0 ? results : [{ json: { _skip: true } }];"
-            }
-        },
-        {
-            "id": "upsert-to-supabase",
-            "name": "Insert to Supabase",
-            "type": "n8n-nodes-base.httpRequest",
-            "typeVersion": 4.2,
-            "position": [
-                1560,
-                300
-            ],
-            "parameters": {
-                "url": "<OPTIMAL_SUPABASE_URL>/rest/v1/content_scraped_items",
-                "method": "POST",
-                "sendHeaders": true,
-                "headerParameters": {
-                    "parameters": [
-                        {
-                            "name": "apikey",
-                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
-                        },
-                        {
-                            "name": "Authorization",
-                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
-                        },
-                        {
-                            "name": "Content-Type",
-                            "value": "application/json"
-                        },
-                        {
-                            "name": "Prefer",
-                            "value": "return=minimal"
-                        }
-                    ]
-                },
-                "sendBody": true,
-                "specifyBody": "json",
-                "jsonBody": "={{ JSON.stringify({ source: $json.source, source_url: $json.source_url, source_account: $json.source_account, topic: $json.topic, title: $json.title, content: $json.content, raw_json: $json.raw_json, scraped_at: $json.scraped_at }) }}"
+                "jsCode": "// Parse RSS XML from both feeds, dedup against Supabase, insert new items\nconst SUPABASE_URL = '<OPTIMAL_SUPABASE_URL>';\nconst SUPABASE_KEY = '<OPTIMAL_SUPABASE_SERVICE_KEY>';\n\nconst items = [];\n\nfor (const input of $input.all()) {\n  const xml = input.json.data || input.json.body || '';\n  const xmlStr = typeof xml === 'string' ? xml : JSON.stringify(xml);\n  \n  const itemRegex = /<item>(.*?)<\\/item>/gs;\n  let match;\n  \n  while ((match = itemRegex.exec(xmlStr)) !== null) {\n    const itemXml = match[1];\n    const getTag = (tag) => {\n      const m = itemXml.match(new RegExp(`<${tag}>(.*?)<\\/${tag}>`, 's'));\n      return m ? m[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, '').trim() : null;\n    };\n    \n    const title = getTag('title');\n    const link = getTag('link');\n    const description = getTag('description');\n    const pubDate = getTag('pubDate');\n    const source = link && link.includes('github.com') ? 'github' : 'rss';\n    \n    items.push({\n      source,\n      source_url: link,\n      source_account: 'anthropics',\n      topic: 'openclaw',\n      title,\n      content: (description || title || 'No content').substring(0, 2000),\n      raw_json: { title, link, description, pubDate },\n      scraped_at: new Date().toISOString(),\n    });\n  }\n}\n\n// Deduplicate locally by source_url\nconst seen = new Set();\nconst unique = items.filter(item => {\n  if (!item.source_url || seen.has(item.source_url)) return false;\n  seen.add(item.source_url);\n  return true;\n});\n\nif (unique.length === 0) {\n  return [{ json: { inserted: 0, message: 'No items parsed' } }];\n}\n\n// Check existing URLs in Supabase\nconst existingRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_scraped_items?select=source_url`,\n  { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }\n);\nconst existing = await existingRes.json();\nconst existingUrls = new Set((existing || []).map(e => e.source_url));\n\nconst newItems = unique.filter(item => !existingUrls.has(item.source_url));\n\nif (newItems.length === 0) {\n  return [{ json: { inserted: 0, message: 'All items already exist' } }];\n}\n\n// Batch insert\nconst insertRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_scraped_items`,\n  {\n    method: 'POST',\n    headers: {\n      apikey: SUPABASE_KEY,\n      Authorization: `Bearer ${SUPABASE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=minimal',\n    },\n    body: JSON.stringify(newItems),\n  }\n);\n\nif (!insertRes.ok) {\n  const errText = await insertRes.text();\n  return [{ json: { inserted: 0, error: `Insert failed (${insertRes.status}): ${errText}` } }];\n}\n\nreturn [{ json: { inserted: newItems.length, total_parsed: unique.length, message: `Inserted ${newItems.length} new items` } }];"
             }
         }
     ],
@@ -220,7 +104,7 @@
             "main": [
                 [
                     {
-                        "node": "Parse RSS Items",
+                        "node": "Parse, Dedup & Insert",
                         "type": "main",
                         "index": 0
                     }
@@ -231,51 +115,7 @@
             "main": [
                 [
                     {
-                        "node": "Parse RSS Items",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Parse RSS Items": {
-            "main": [
-                [
-                    {
-                        "node": "Filter Empty",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Filter Empty": {
-            "main": [
-                [
-                    {
-                        "node": "Check Duplicate",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Check Duplicate": {
-            "main": [
-                [
-                    {
-                        "node": "Filter New Only",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Filter New Only": {
-            "main": [
-                [
-                    {
-                        "node": "Insert to Supabase",
+                        "node": "Parse, Dedup & Insert",
                         "type": "main",
                         "index": 0
                     }
@@ -288,13 +128,17 @@
         "callerPolicy": "workflowsFromSameOwner",
         "availableInMCP": false
     },
-    "staticData": null,
+    "staticData": {
+        "node:Schedule Trigger": {
+            "recurrenceRules": []
+        }
+    },
     "meta": null,
     "pinData": null,
-    "versionId": "60f2379b-44ef-44c7-952b-bcfb624c74bc",
-    "activeVersionId": null,
-    "versionCounter": 1,
-    "triggerCount": 0,
+    "versionId": "d289b29b-1995-4784-88b1-9ef90b907abb",
+    "activeVersionId": "d289b29b-1995-4784-88b1-9ef90b907abb",
+    "versionCounter": 7,
+    "triggerCount": 1,
     "shared": [
         {
             "updatedAt": "2026-03-24T18:30:51.585Z",
@@ -315,5 +159,149 @@
         }
     ],
     "tags": [],
-    "activeVersion": null
+    "activeVersion": {
+        "updatedAt": "2026-03-24T19:09:29.506Z",
+        "createdAt": "2026-03-24T19:09:29.506Z",
+        "versionId": "d289b29b-1995-4784-88b1-9ef90b907abb",
+        "workflowId": "spYWTTqvcdqScE0d",
+        "nodes": [
+            {
+                "id": "schedule-trigger",
+                "name": "Schedule Trigger",
+                "type": "n8n-nodes-base.scheduleTrigger",
+                "typeVersion": 1.2,
+                "position": [
+                    200,
+                    300
+                ],
+                "parameters": {
+                    "rule": {
+                        "interval": [
+                            {
+                                "field": "hours",
+                                "hoursInterval": 1
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                "id": "fetch-github-repos",
+                "name": "Fetch GitHub Repos",
+                "type": "n8n-nodes-base.httpRequest",
+                "typeVersion": 4.2,
+                "position": [
+                    440,
+                    200
+                ],
+                "parameters": {
+                    "url": "http://localhost:1200/github/repos/anthropics/claude-code",
+                    "method": "GET",
+                    "options": {
+                        "response": {
+                            "response": {
+                                "responseFormat": "text"
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "id": "fetch-github-issues",
+                "name": "Fetch GitHub Issues",
+                "type": "n8n-nodes-base.httpRequest",
+                "typeVersion": 4.2,
+                "position": [
+                    440,
+                    420
+                ],
+                "parameters": {
+                    "url": "http://localhost:1200/github/issue/anthropics/claude-code",
+                    "method": "GET",
+                    "options": {
+                        "response": {
+                            "response": {
+                                "responseFormat": "text"
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "id": "parse-and-dedup",
+                "name": "Parse, Dedup & Insert",
+                "type": "n8n-nodes-base.code",
+                "typeVersion": 2,
+                "position": [
+                    700,
+                    300
+                ],
+                "parameters": {
+                    "jsCode": "// Parse RSS XML from both feeds, dedup against Supabase, insert new items\nconst SUPABASE_URL = '<OPTIMAL_SUPABASE_URL>';\nconst SUPABASE_KEY = '<OPTIMAL_SUPABASE_SERVICE_KEY>';\n\nconst items = [];\n\nfor (const input of $input.all()) {\n  const xml = input.json.data || input.json.body || '';\n  const xmlStr = typeof xml === 'string' ? xml : JSON.stringify(xml);\n  \n  const itemRegex = /<item>(.*?)<\\/item>/gs;\n  let match;\n  \n  while ((match = itemRegex.exec(xmlStr)) !== null) {\n    const itemXml = match[1];\n    const getTag = (tag) => {\n      const m = itemXml.match(new RegExp(`<${tag}>(.*?)<\\/${tag}>`, 's'));\n      return m ? m[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, '').trim() : null;\n    };\n    \n    const title = getTag('title');\n    const link = getTag('link');\n    const description = getTag('description');\n    const pubDate = getTag('pubDate');\n    const source = link && link.includes('github.com') ? 'github' : 'rss';\n    \n    items.push({\n      source,\n      source_url: link,\n      source_account: 'anthropics',\n      topic: 'openclaw',\n      title,\n      content: (description || title || 'No content').substring(0, 2000),\n      raw_json: { title, link, description, pubDate },\n      scraped_at: new Date().toISOString(),\n    });\n  }\n}\n\n// Deduplicate locally by source_url\nconst seen = new Set();\nconst unique = items.filter(item => {\n  if (!item.source_url || seen.has(item.source_url)) return false;\n  seen.add(item.source_url);\n  return true;\n});\n\nif (unique.length === 0) {\n  return [{ json: { inserted: 0, message: 'No items parsed' } }];\n}\n\n// Check existing URLs in Supabase\nconst existingRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_scraped_items?select=source_url`,\n  { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }\n);\nconst existing = await existingRes.json();\nconst existingUrls = new Set((existing || []).map(e => e.source_url));\n\nconst newItems = unique.filter(item => !existingUrls.has(item.source_url));\n\nif (newItems.length === 0) {\n  return [{ json: { inserted: 0, message: 'All items already exist' } }];\n}\n\n// Batch insert\nconst insertRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_scraped_items`,\n  {\n    method: 'POST',\n    headers: {\n      apikey: SUPABASE_KEY,\n      Authorization: `Bearer ${SUPABASE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=minimal',\n    },\n    body: JSON.stringify(newItems),\n  }\n);\n\nif (!insertRes.ok) {\n  const errText = await insertRes.text();\n  return [{ json: { inserted: 0, error: `Insert failed (${insertRes.status}): ${errText}` } }];\n}\n\nreturn [{ json: { inserted: newItems.length, total_parsed: unique.length, message: `Inserted ${newItems.length} new items` } }];"
+                }
+            }
+        ],
+        "connections": {
+            "Schedule Trigger": {
+                "main": [
+                    [
+                        {
+                            "node": "Fetch GitHub Repos",
+                            "type": "main",
+                            "index": 0
+                        },
+                        {
+                            "node": "Fetch GitHub Issues",
+                            "type": "main",
+                            "index": 0
+                        }
+                    ]
+                ]
+            },
+            "Fetch GitHub Repos": {
+                "main": [
+                    [
+                        {
+                            "node": "Parse, Dedup & Insert",
+                            "type": "main",
+                            "index": 0
+                        }
+                    ]
+                ]
+            },
+            "Fetch GitHub Issues": {
+                "main": [
+                    [
+                        {
+                            "node": "Parse, Dedup & Insert",
+                            "type": "main",
+                            "index": 0
+                        }
+                    ]
+                ]
+            }
+        },
+        "authors": "Carlos Lenis",
+        "name": null,
+        "description": null,
+        "autosaved": false,
+        "workflowPublishHistory": [
+            {
+                "createdAt": "2026-03-24T19:09:29.567Z",
+                "id": 43,
+                "workflowId": "spYWTTqvcdqScE0d",
+                "versionId": "d289b29b-1995-4784-88b1-9ef90b907abb",
+                "event": "activated",
+                "userId": "86778a2a-3026-426a-b9bc-e0e85f9e7d3f"
+            },
+            {
+                "createdAt": "2026-03-24T19:09:29.550Z",
+                "id": 42,
+                "workflowId": "spYWTTqvcdqScE0d",
+                "versionId": "d289b29b-1995-4784-88b1-9ef90b907abb",
+                "event": "deactivated",
+                "userId": "86778a2a-3026-426a-b9bc-e0e85f9e7d3f"
+            }
+        ]
+    }
 }

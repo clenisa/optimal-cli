@@ -1,0 +1,90 @@
+{
+    "updatedAt": "2026-03-24T19:11:04.180Z",
+    "createdAt": "2026-03-24T19:11:04.180Z",
+    "id": "CE7W1OXH3tZB7xF6",
+    "name": "Content Pipeline \u2014 FB Weekly Post",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "schedule-weekly",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                200,
+                300
+            ],
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 9 * * 1"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "fb-post-generator",
+            "name": "Generate FB Post",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                480,
+                300
+            ],
+            "parameters": {
+                "jsCode": "const SUPABASE_URL = '<OPTIMAL_SUPABASE_URL>';\nconst SUPABASE_KEY = '<OPTIMAL_SUPABASE_SERVICE_KEY>';\nconst GROQ_KEY = '<GROQ_API_KEY>';\nconst CAMPAIGN_ID = '46189a3a-f75b-4811-9e93-efaf252956d6';\n\n// Step 1: Fetch insights from the last 7 days\nconst since = new Date(Date.now() - 7 * 86400000).toISOString();\nconst insightsRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_insights?topic=eq.openclaw&created_at=gte.${since}&order=created_at.desc&limit=7`,\n  { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }\n);\nconst insights = await insightsRes.json();\n\nif (!insights.length) {\n  return [{ json: { skipped: true, message: 'No insights in last 7 days' } }];\n}\n\n// Step 2: Combine insights into a prompt\nconst insightSummaries = insights.map((ins, i) => {\n  const themes = Array.isArray(ins.key_themes) ? ins.key_themes.join(', ') : '';\n  return `Day ${i + 1} (${ins.source_count} sources):\\n${ins.summary}\\nThemes: ${themes}`;\n}).join('\\n\\n---\\n\\n');\n\nconst systemPrompt = `You write engaging Facebook posts for Optimal Tech Corp \u2014 a Miami-based AI consulting company. \nYour tone is confident, technically grounded, and internet-native.\nWrite a medium-length Facebook post (150-300 words) summarizing the week's developments.\nInclude specific details, numbers, and links where relevant.\nEnd with a question or call-to-action to drive engagement.\nReturn ONLY the post text, no JSON wrapping.`;\n\nconst userPrompt = `Based on these ${insights.length} daily intelligence digests from the past week, write a Facebook post:\\n\\n${insightSummaries}`;\n\n// Step 3: Call Groq\nconst groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {\n  method: 'POST',\n  headers: {\n    Authorization: `Bearer ${GROQ_KEY}`,\n    'Content-Type': 'application/json',\n  },\n  body: JSON.stringify({\n    model: 'llama-3.3-70b-versatile',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.7,\n    max_tokens: 1000,\n  })\n});\n\nconst groqData = await groqRes.json();\nif (groqData.error) {\n  return [{ json: { error: 'Groq API error: ' + JSON.stringify(groqData.error) } }];\n}\n\nlet content = groqData.choices?.[0]?.message?.content || '';\n// Strip any accidental JSON wrapping\ncontent = content.replace(/^```[\\s\\S]*?\\n/, '').replace(/\\n```$/, '').trim();\n\n// Step 4: Save to content_generated_posts\nconst post = {\n  campaign_id: CAMPAIGN_ID,\n  insight_id: insights[0].id,\n  platform: 'facebook',\n  content: content,\n  hashtags: [],\n  status: 'draft',\n  model_used: 'groq/llama-3.3-70b',\n};\n\nconst saveRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_generated_posts`,\n  {\n    method: 'POST',\n    headers: {\n      apikey: SUPABASE_KEY,\n      Authorization: `Bearer ${SUPABASE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=representation',\n    },\n    body: JSON.stringify(post),\n  }\n);\n\nif (!saveRes.ok) {\n  const errText = await saveRes.text();\n  return [{ json: { error: `Save failed (${saveRes.status}): ${errText}` } }];\n}\n\nconst saved = await saveRes.json();\nreturn [{ json: { post_id: saved[0]?.id, platform: 'facebook', status: 'draft', content_preview: content.substring(0, 200) } }];"
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Generate FB Post",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": null,
+    "versionId": "1e2c3c36-e946-45da-b1c8-d0c4b4ed7607",
+    "activeVersionId": null,
+    "versionCounter": 1,
+    "triggerCount": 0,
+    "shared": [
+        {
+            "updatedAt": "2026-03-24T19:11:04.183Z",
+            "createdAt": "2026-03-24T19:11:04.183Z",
+            "role": "workflow:owner",
+            "workflowId": "CE7W1OXH3tZB7xF6",
+            "projectId": "7u5oTwfYTRLwiYwv",
+            "project": {
+                "updatedAt": "2026-03-10T01:16:44.803Z",
+                "createdAt": "2026-01-22T05:47:18.802Z",
+                "id": "7u5oTwfYTRLwiYwv",
+                "name": "Carlos Lenis <clenis@optimaltech.ai>",
+                "type": "personal",
+                "icon": null,
+                "description": null,
+                "creatorId": "86778a2a-3026-426a-b9bc-e0e85f9e7d3f"
+            }
+        }
+    ],
+    "tags": [],
+    "activeVersion": null
+}

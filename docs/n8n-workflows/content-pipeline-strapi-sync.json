@@ -1,0 +1,90 @@
+{
+    "updatedAt": "2026-03-24T19:11:26.262Z",
+    "createdAt": "2026-03-24T19:11:26.262Z",
+    "id": "xY3lLzAnSm5WvwI4",
+    "name": "Content Pipeline \u2014 Strapi Sync",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "schedule-30m",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                200,
+                300
+            ],
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "minutes",
+                            "minutesInterval": 30
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "strapi-sync",
+            "name": "Sync Approved Posts to Strapi",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                480,
+                300
+            ],
+            "parameters": {
+                "jsCode": "const SUPABASE_URL = '<OPTIMAL_SUPABASE_URL>';\nconst SUPABASE_KEY = '<OPTIMAL_SUPABASE_SERVICE_KEY>';\nconst STRAPI_URL = '<STRAPI_BASE_URL>';\nconst STRAPI_TOKEN = '<STRAPI_TOKEN>';\n\n// Step 1: Fetch approved posts from Supabase\nconst approvedRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_generated_posts?status=eq.approved&order=created_at.asc&limit=10`,\n  { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }\n);\nconst approvedPosts = await approvedRes.json();\n\nif (!approvedPosts.length) {\n  return [{ json: { synced: 0, message: 'No approved posts to sync' } }];\n}\n\nlet synced = 0;\nlet failed = 0;\nconst results = [];\n\nfor (const post of approvedPosts) {\n  try {\n    // Step 2: Create social post in Strapi\n    const strapiRes = await fetch(`${STRAPI_URL}/api/social-posts`, {\n      method: 'POST',\n      headers: {\n        Authorization: `Bearer ${STRAPI_TOKEN}`,\n        'Content-Type': 'application/json',\n      },\n      body: JSON.stringify({\n        data: {\n          headline: (post.content || '').substring(0, 100),\n          body: post.content,\n          platform: post.platform,\n          brand: 'OPTIMAL',\n          scheduled_date: new Date().toISOString().split('T')[0],\n          delivery_status: 'pending',\n          campaign_ref: post.campaign_id,\n        }\n      })\n    });\n\n    if (!strapiRes.ok) {\n      const errText = await strapiRes.text();\n      results.push({ id: post.id, status: 'failed', error: errText });\n      failed++;\n      continue;\n    }\n\n    const strapiData = await strapiRes.json();\n    const documentId = strapiData.data?.documentId || strapiData.data?.id;\n\n    // Step 3: Update Supabase post status to 'posted'\n    const updateRes = await fetch(\n      `${SUPABASE_URL}/rest/v1/content_generated_posts?id=eq.${post.id}`,\n      {\n        method: 'PATCH',\n        headers: {\n          apikey: SUPABASE_KEY,\n          Authorization: `Bearer ${SUPABASE_KEY}`,\n          'Content-Type': 'application/json',\n          Prefer: 'return=minimal',\n        },\n        body: JSON.stringify({\n          status: 'posted',\n          posted_at: new Date().toISOString(),\n        })\n      }\n    );\n\n    results.push({ id: post.id, status: 'synced', strapi_document_id: documentId });\n    synced++;\n  } catch (err) {\n    results.push({ id: post.id, status: 'failed', error: err.message });\n    failed++;\n  }\n}\n\nreturn [{ json: { synced, failed, total: approvedPosts.length, results } }];"
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Sync Approved Posts to Strapi",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": null,
+    "versionId": "d807a80c-ddc3-4936-904a-974241ce3836",
+    "activeVersionId": null,
+    "versionCounter": 1,
+    "triggerCount": 0,
+    "shared": [
+        {
+            "updatedAt": "2026-03-24T19:11:26.265Z",
+            "createdAt": "2026-03-24T19:11:26.265Z",
+            "role": "workflow:owner",
+            "workflowId": "xY3lLzAnSm5WvwI4",
+            "projectId": "7u5oTwfYTRLwiYwv",
+            "project": {
+                "updatedAt": "2026-03-10T01:16:44.803Z",
+                "createdAt": "2026-01-22T05:47:18.802Z",
+                "id": "7u5oTwfYTRLwiYwv",
+                "name": "Carlos Lenis <clenis@optimaltech.ai>",
+                "type": "personal",
+                "icon": null,
+                "description": null,
+                "creatorId": "86778a2a-3026-426a-b9bc-e0e85f9e7d3f"
+            }
+        }
+    ],
+    "tags": [],
+    "activeVersion": null
+}
