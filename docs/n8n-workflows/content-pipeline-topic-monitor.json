@@ -1,0 +1,319 @@
+{
+    "updatedAt": "2026-03-24T18:30:51.581Z",
+    "createdAt": "2026-03-24T18:30:51.581Z",
+    "id": "spYWTTqvcdqScE0d",
+    "name": "Content Pipeline \u2014 Topic Monitor",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "schedule-trigger",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                200,
+                300
+            ],
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "hours",
+                            "hoursInterval": 1
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "fetch-github-repos",
+            "name": "Fetch GitHub Repos",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                440,
+                200
+            ],
+            "parameters": {
+                "url": "http://localhost:1200/github/repos/anthropics/claude-code",
+                "method": "GET",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "fetch-github-issues",
+            "name": "Fetch GitHub Issues",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                440,
+                420
+            ],
+            "parameters": {
+                "url": "http://localhost:1200/github/issue/anthropics/claude-code",
+                "method": "GET",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "parse-rss-items",
+            "name": "Parse RSS Items",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                680,
+                300
+            ],
+            "parameters": {
+                "jsCode": "// Parse RSS XML from both GitHub feeds\nconst items = [];\n\nfor (const input of $input.all()) {\n  const xml = input.json.data || input.json.body || '';\n  const xmlStr = typeof xml === 'string' ? xml : JSON.stringify(xml);\n  \n  // Simple XML item extraction\n  const itemRegex = /<item>(.*?)<\\/item>/gs;\n  let match;\n  \n  while ((match = itemRegex.exec(xmlStr)) !== null) {\n    const itemXml = match[1];\n    const getTag = (tag) => {\n      const m = itemXml.match(new RegExp(`<${tag}>(.*?)<\\/${tag}>`, 's'));\n      return m ? m[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, '').trim() : null;\n    };\n    \n    const title = getTag('title');\n    const link = getTag('link');\n    const description = getTag('description');\n    const pubDate = getTag('pubDate');\n    \n    // Determine source from URL\n    const source = link && link.includes('github.com') ? 'github' : 'rss';\n    const sourceAccount = 'anthropics';\n    \n    items.push({\n      json: {\n        source: source,\n        source_url: link,\n        source_account: sourceAccount,\n        topic: 'openclaw',\n        title: title,\n        content: description || title || 'No content',\n        raw_json: { title, link, description, pubDate },\n        scraped_at: new Date().toISOString()\n      }\n    });\n  }\n}\n\n// Deduplicate by source_url\nconst seen = new Set();\nconst unique = items.filter(item => {\n  if (seen.has(item.json.source_url)) return false;\n  seen.add(item.json.source_url);\n  return true;\n});\n\nreturn unique.length > 0 ? unique : [{ json: { _empty: true, message: 'No items parsed' } }];"
+            }
+        },
+        {
+            "id": "filter-empty",
+            "name": "Filter Empty",
+            "type": "n8n-nodes-base.filter",
+            "typeVersion": 2,
+            "position": [
+                900,
+                300
+            ],
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict"
+                    },
+                    "combinator": "and",
+                    "conditions": [
+                        {
+                            "id": "filter-empty-check",
+                            "leftValue": "={{ $json._empty }}",
+                            "rightValue": true,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "notTrue"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "check-duplicate",
+            "name": "Check Duplicate",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1120,
+                300
+            ],
+            "parameters": {
+                "url": "=<OPTIMAL_SUPABASE_URL>/rest/v1/content_scraped_items?source_url=eq.{{ encodeURIComponent($json.source_url) }}&select=id&limit=1",
+                "method": "GET",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "apikey",
+                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        }
+                    ]
+                },
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "json"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "filter-new-only",
+            "name": "Filter New Only",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1340,
+                300
+            ],
+            "parameters": {
+                "jsCode": "// Only keep items where the duplicate check returned empty array\nconst results = [];\nfor (const item of $input.all()) {\n  const data = item.json;\n  // The HTTP response body is in .data or direct - check for empty array\n  const existing = Array.isArray(data) ? data : (data.data || data);\n  if (Array.isArray(existing) && existing.length === 0) {\n    // Not a duplicate - pass through the original scraped item\n    // We need to get it from the previous node's data stored in the item\n    results.push(item);\n  }\n}\nreturn results.length > 0 ? results : [{ json: { _skip: true } }];"
+            }
+        },
+        {
+            "id": "upsert-to-supabase",
+            "name": "Insert to Supabase",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1560,
+                300
+            ],
+            "parameters": {
+                "url": "<OPTIMAL_SUPABASE_URL>/rest/v1/content_scraped_items",
+                "method": "POST",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "apikey",
+                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        },
+                        {
+                            "name": "Prefer",
+                            "value": "return=minimal"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ source: $json.source, source_url: $json.source_url, source_account: $json.source_account, topic: $json.topic, title: $json.title, content: $json.content, raw_json: $json.raw_json, scraped_at: $json.scraped_at }) }}"
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch GitHub Repos",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Fetch GitHub Issues",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch GitHub Repos": {
+            "main": [
+                [
+                    {
+                        "node": "Parse RSS Items",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch GitHub Issues": {
+            "main": [
+                [
+                    {
+                        "node": "Parse RSS Items",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Parse RSS Items": {
+            "main": [
+                [
+                    {
+                        "node": "Filter Empty",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Filter Empty": {
+            "main": [
+                [
+                    {
+                        "node": "Check Duplicate",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Duplicate": {
+            "main": [
+                [
+                    {
+                        "node": "Filter New Only",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Filter New Only": {
+            "main": [
+                [
+                    {
+                        "node": "Insert to Supabase",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": null,
+    "versionId": "60f2379b-44ef-44c7-952b-bcfb624c74bc",
+    "activeVersionId": null,
+    "versionCounter": 1,
+    "triggerCount": 0,
+    "shared": [
+        {
+            "updatedAt": "2026-03-24T18:30:51.585Z",
+            "createdAt": "2026-03-24T18:30:51.585Z",
+            "role": "workflow:owner",
+            "workflowId": "spYWTTqvcdqScE0d",
+            "projectId": "7u5oTwfYTRLwiYwv",
+            "project": {
+                "updatedAt": "2026-03-10T01:16:44.803Z",
+                "createdAt": "2026-01-22T05:47:18.802Z",
+                "id": "7u5oTwfYTRLwiYwv",
+                "name": "Carlos Lenis <clenis@optimaltech.ai>",
+                "type": "personal",
+                "icon": null,
+                "description": null,
+                "creatorId": "86778a2a-3026-426a-b9bc-e0e85f9e7d3f"
+            }
+        }
+    ],
+    "tags": [],
+    "activeVersion": null
+}

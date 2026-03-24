@@ -1,0 +1,291 @@
+{
+    "updatedAt": "2026-03-24T18:31:31.910Z",
+    "createdAt": "2026-03-24T18:31:31.910Z",
+    "id": "rAqJ7KSGBDyOCUMo",
+    "name": "Content Pipeline \u2014 Daily Digest",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "schedule-daily",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                200,
+                300
+            ],
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 6 * * *"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "fetch-recent-items",
+            "name": "Fetch Recent Scraped Items",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                440,
+                300
+            ],
+            "parameters": {
+                "url": "<OPTIMAL_SUPABASE_URL>/rest/v1/content_scraped_items?topic=eq.openclaw&scraped_at=gte.{{ new Date(Date.now() - 86400000).toISOString() }}&order=scraped_at.desc&limit=50",
+                "method": "GET",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "apikey",
+                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        }
+                    ]
+                },
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "json"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "format-prompt",
+            "name": "Format AI Prompt",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                680,
+                300
+            ],
+            "parameters": {
+                "jsCode": "const items = $input.all();\n\n// Items come as array from Supabase REST\nlet scrapedItems = [];\nif (items.length === 1 && Array.isArray(items[0].json)) {\n  scrapedItems = items[0].json;\n} else {\n  scrapedItems = items.map(i => i.json);\n}\n\nif (scrapedItems.length === 0 || (scrapedItems.length === 1 && !scrapedItems[0].title)) {\n  return [{ json: { _skip: true, message: 'No items to summarize' } }];\n}\n\nconst itemSummaries = scrapedItems.map((item, i) => {\n  return `${i + 1}. [${item.source}] ${item.title || 'Untitled'}\n   ${(item.content || '').substring(0, 200)}\n   URL: ${item.source_url || 'N/A'}`;\n}).join('\n\n');\n\nconst prompt = `You are an AI research analyst for Optimal Tech Corp. Analyze the following ${scrapedItems.length} items scraped from various sources about AI, Claude, and developer tools.\n\nProvide:\n1. A 2-3 paragraph executive summary of the key developments\n2. A JSON array of 3-5 key themes (short strings)\n3. A JSON array of 2-3 notable quotes or data points\n\nFormat your response as JSON:\n{\n  \"summary\": \"...\",\n  \"key_themes\": [\"...\"],\n  \"key_quotes\": [\"...\"]\n}\n\n--- ITEMS ---\n${itemSummaries}`;\n\nreturn [{\n  json: {\n    prompt: prompt,\n    source_count: scrapedItems.length,\n    period_start: scrapedItems[scrapedItems.length - 1]?.scraped_at || new Date(Date.now() - 86400000).toISOString(),\n    period_end: scrapedItems[0]?.scraped_at || new Date().toISOString()\n  }\n}];"
+            }
+        },
+        {
+            "id": "check-skip",
+            "name": "Check Skip",
+            "type": "n8n-nodes-base.filter",
+            "typeVersion": 2,
+            "position": [
+                900,
+                300
+            ],
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict"
+                    },
+                    "combinator": "and",
+                    "conditions": [
+                        {
+                            "id": "check-skip-cond",
+                            "leftValue": "={{ $json._skip }}",
+                            "rightValue": true,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "notTrue"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "call-groq",
+            "name": "Call Groq AI",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1120,
+                300
+            ],
+            "parameters": {
+                "url": "https://api.groq.com/openai/v1/chat/completions",
+                "method": "POST",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <GROQ_API_KEY>"
+                        },
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: 'You are a content research analyst. Always respond with valid JSON only, no markdown fences.' }, { role: 'user', content: $json.prompt }], temperature: 0.3, max_tokens: 2000 }) }}"
+            }
+        },
+        {
+            "id": "parse-ai-response",
+            "name": "Parse AI Response",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1340,
+                300
+            ],
+            "parameters": {
+                "jsCode": "const input = $input.first().json;\nconst prevData = $('Format AI Prompt').first().json;\n\ntry {\n  const choice = input.choices?.[0]?.message?.content || '';\n  // Strip markdown fences if present\n  const cleaned = choice.replace(/^$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  \n  return [{\n    json: {\n      topic: 'openclaw',\n      period_start: prevData.period_start,\n      period_end: prevData.period_end,\n      summary: parsed.summary || 'No summary generated',\n      key_themes: parsed.key_themes || [],\n      key_quotes: parsed.key_quotes || [],\n      source_count: prevData.source_count,\n      model_used: 'groq/llama-3.3-70b-versatile'\n    }\n  }];\n} catch (e) {\n  return [{\n    json: {\n      topic: 'openclaw',\n      period_start: prevData.period_start,\n      period_end: prevData.period_end,\n      summary: 'AI parsing failed: ' + e.message,\n      key_themes: [],\n      key_quotes: [],\n      source_count: prevData.source_count,\n      model_used: 'groq/llama-3.3-70b-versatile'\n    }\n  }];\n}"
+            }
+        },
+        {
+            "id": "save-insight",
+            "name": "Save Insight to Supabase",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1560,
+                300
+            ],
+            "parameters": {
+                "url": "<OPTIMAL_SUPABASE_URL>/rest/v1/content_insights",
+                "method": "POST",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "apikey",
+                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        },
+                        {
+                            "name": "Prefer",
+                            "value": "return=representation"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ topic: $json.topic, period_start: $json.period_start, period_end: $json.period_end, summary: $json.summary, key_themes: $json.key_themes, key_quotes: $json.key_quotes, source_count: $json.source_count, model_used: $json.model_used }) }}"
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch Recent Scraped Items",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Recent Scraped Items": {
+            "main": [
+                [
+                    {
+                        "node": "Format AI Prompt",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format AI Prompt": {
+            "main": [
+                [
+                    {
+                        "node": "Check Skip",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Skip": {
+            "main": [
+                [
+                    {
+                        "node": "Call Groq AI",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Call Groq AI": {
+            "main": [
+                [
+                    {
+                        "node": "Parse AI Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Parse AI Response": {
+            "main": [
+                [
+                    {
+                        "node": "Save Insight to Supabase",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": null,
+    "versionId": "77b88469-a26a-43c0-892b-211bb7450ef4",
+    "activeVersionId": null,
+    "versionCounter": 1,
+    "triggerCount": 0,
+    "shared": [
+        {
+            "updatedAt": "2026-03-24T18:31:31.917Z",
+            "createdAt": "2026-03-24T18:31:31.917Z",
+            "role": "workflow:owner",
+            "workflowId": "rAqJ7KSGBDyOCUMo",
+            "projectId": "7u5oTwfYTRLwiYwv",
+            "project": {
+                "updatedAt": "2026-03-10T01:16:44.803Z",
+                "createdAt": "2026-01-22T05:47:18.802Z",
+                "id": "7u5oTwfYTRLwiYwv",
+                "name": "Carlos Lenis <clenis@optimaltech.ai>",
+                "type": "personal",
+                "icon": null,
+                "description": null,
+                "creatorId": "86778a2a-3026-426a-b9bc-e0e85f9e7d3f"
+            }
+        }
+    ],
+    "tags": [],
+    "activeVersion": null
+}

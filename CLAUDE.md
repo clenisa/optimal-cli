@@ -107,6 +107,41 @@ Three brands: `CRE-11TRUST` (ElevenTrust CRE), `LIFEINSUR` (Anchor Point Insuran
 - **Strapi CSP**: `config/middlewares.ts` whitelists `images.unsplash.com` for social post image previews
 - **Meta API not yet connected** for LIFEINSUR — task on kanban (P1) to connect via Graph API Explorer
 
+### Content Research Pipeline (RSSHub + n8n + Supabase)
+
+Automated scraping, AI aggregation, and post generation system. Data flows through four tables in the OptimalOS Supabase instance (`public` schema):
+
+| Table | Purpose |
+|-------|---------|
+| `content_scraped_items` | Raw scraped data from any source (github, rss, twitter, newsapi) |
+| `content_insights` | AI-aggregated daily digests with themes and quotes |
+| `content_campaigns` | Campaign definitions (sources, schedule, platforms, brand) |
+| `content_generated_posts` | AI-drafted posts (draft/approved/posted/failed lifecycle) |
+
+**Infrastructure**:
+- **RSSHub**: Docker container on `localhost:1200` (`sudo docker`, name: `rsshub`, restart: unless-stopped)
+- Working routes: `/github/repos/<org>/<repo>`, `/github/issue/<org>/<repo>`, `/npm/package/<pkg>`
+- Twitter routes return 503 (blocked by X) — use GitHub/npm RSS as primary sources
+- Campaign ID (OpenClaw Intelligence): `46189a3a-f75b-4811-9e93-efaf252956d6`
+
+**n8n Workflows** (all created INACTIVE — activate manually after review):
+
+| Workflow | n8n ID | Schedule | Purpose |
+|----------|--------|----------|---------|
+| Content Pipeline — Topic Monitor | `spYWTTqvcdqScE0d` | Every 1h | Scrape RSSHub feeds, dedup, insert to `content_scraped_items` |
+| Content Pipeline — Daily Digest | `rAqJ7KSGBDyOCUMo` | Daily 6am | Aggregate last 24h items, call Groq for summary, save to `content_insights` |
+| Content Pipeline — X Post Generator | `NsyBs060udg2glkY` | 8am/12pm/4pm/8pm | Generate 280-char X post from latest insight, save as draft to `content_generated_posts` |
+
+**Workflow JSON specs**: `docs/n8n-workflows/` (secrets redacted, importable via n8n UI)
+
+**Data flow**: RSSHub (localhost:1200) → n8n Topic Monitor → `content_scraped_items` → n8n Daily Digest → Groq AI → `content_insights` → n8n X Post Generator → Groq AI → `content_generated_posts` (draft) → [future: X API posting]
+
+**Gotchas**:
+- RSSHub Docker requires `sudo` for all operations
+- n8n workflows use hardcoded Supabase keys in HTTP Request nodes (not n8n credentials) — update if keys rotate
+- X API posting is a placeholder — posts save as `draft` status in Supabase until X API keys are configured
+- All content tables have RLS enabled with permissive policies for service_role access
+
 ### Kanban Sync (`lib/kanban/sync.ts`)
 
 3-way sync between Supabase ↔ Obsidian ↔ CLI. Creates its own Supabase client (not via `getSupabase()`). Obsidian files use `task__<slug>__<uuid8>.md` naming with YAML frontmatter.
@@ -243,6 +278,10 @@ META_ACCESS_TOKEN=...
 META_IG_ACCOUNT_ID=...
 META_IG_ACCOUNT_ID_CRE_11TRUST=...
 META_IG_ACCOUNT_ID_LIFEINSUR=...
+
+# n8n
+N8N_API_KEY=...
+N8N_WEBHOOK_URL=...
 
 # Config
 OPTIMAL_CONFIG_OWNER=oracle

@@ -1,0 +1,291 @@
+{
+    "updatedAt": "2026-03-24T18:32:05.924Z",
+    "createdAt": "2026-03-24T18:32:05.924Z",
+    "id": "NsyBs060udg2glkY",
+    "name": "Content Pipeline \u2014 X Post Generator",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "schedule-4h",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                200,
+                300
+            ],
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 8,12,16,20 * * *"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "fetch-latest-insight",
+            "name": "Fetch Latest Insight",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                440,
+                300
+            ],
+            "parameters": {
+                "url": "<OPTIMAL_SUPABASE_URL>/rest/v1/content_insights?topic=eq.openclaw&order=created_at.desc&limit=1",
+                "method": "GET",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "apikey",
+                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        }
+                    ]
+                },
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "json"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "extract-insight",
+            "name": "Extract Insight",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                680,
+                300
+            ],
+            "parameters": {
+                "jsCode": "const data = $input.first().json;\nconst insights = Array.isArray(data) ? data : [data];\n\nif (!insights.length || !insights[0]?.summary) {\n  return [{ json: { _skip: true, message: 'No insights available' } }];\n}\n\nconst insight = insights[0];\nconst themes = Array.isArray(insight.key_themes) ? insight.key_themes.join(', ') : '';\n\nreturn [{\n  json: {\n    insight_id: insight.id,\n    summary: insight.summary,\n    themes: themes,\n    key_quotes: insight.key_quotes || []\n  }\n}];"
+            }
+        },
+        {
+            "id": "check-insight-skip",
+            "name": "Check Insight Exists",
+            "type": "n8n-nodes-base.filter",
+            "typeVersion": 2,
+            "position": [
+                900,
+                300
+            ],
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict"
+                    },
+                    "combinator": "and",
+                    "conditions": [
+                        {
+                            "id": "insight-exists-cond",
+                            "leftValue": "={{ $json._skip }}",
+                            "rightValue": true,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "notTrue"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "generate-tweet",
+            "name": "Generate X Post via Groq",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1120,
+                300
+            ],
+            "parameters": {
+                "url": "https://api.groq.com/openai/v1/chat/completions",
+                "method": "POST",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <GROQ_API_KEY>"
+                        },
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: 'You are a social media writer for Optimal Tech Corp (@OpenClawHQ), an AI-first software company. Write engaging X (Twitter) posts that are informative, concise, and professional. Always respond with valid JSON only. No markdown fences.' }, { role: 'user', content: 'Write a single X post (max 280 characters) based on this insight. Include 1-2 relevant hashtags. Respond as JSON: {\"content\": \"...\", \"hashtags\": [\"...\"]}.\n\nInsight summary: ' + $json.summary + '\n\nKey themes: ' + $json.themes }], temperature: 0.7, max_tokens: 300 }) }}"
+            }
+        },
+        {
+            "id": "parse-tweet",
+            "name": "Parse Generated Post",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1340,
+                300
+            ],
+            "parameters": {
+                "jsCode": "const input = $input.first().json;\nconst prevData = $('Extract Insight').first().json;\n\ntry {\n  const choice = input.choices?.[0]?.message?.content || '';\n  const cleaned = choice.replace(/^```json?\n?/i, '').replace(/\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  \n  let content = parsed.content || '';\n  // Ensure max 280 chars\n  if (content.length > 280) {\n    content = content.substring(0, 277) + '...';\n  }\n  \n  return [{\n    json: {\n      campaign_id: '46189a3a-f75b-4811-9e93-efaf252956d6',\n      insight_id: prevData.insight_id,\n      platform: 'twitter',\n      content: content,\n      hashtags: parsed.hashtags || [],\n      status: 'draft',\n      model_used: 'groq/llama-3.3-70b-versatile'\n    }\n  }];\n} catch (e) {\n  return [{\n    json: {\n      campaign_id: '46189a3a-f75b-4811-9e93-efaf252956d6',\n      insight_id: prevData.insight_id,\n      platform: 'twitter',\n      content: 'Generation failed: ' + e.message,\n      hashtags: [],\n      status: 'failed',\n      model_used: 'groq/llama-3.3-70b-versatile'\n    }\n  }];\n}"
+            }
+        },
+        {
+            "id": "save-post",
+            "name": "Save Post to Supabase",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1560,
+                300
+            ],
+            "parameters": {
+                "url": "<OPTIMAL_SUPABASE_URL>/rest/v1/content_generated_posts",
+                "method": "POST",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "apikey",
+                            "value": "<OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <OPTIMAL_SUPABASE_SERVICE_KEY>"
+                        },
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        },
+                        {
+                            "name": "Prefer",
+                            "value": "return=representation"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ campaign_id: $json.campaign_id, insight_id: $json.insight_id, platform: $json.platform, content: $json.content, hashtags: $json.hashtags, status: $json.status, model_used: $json.model_used }) }}"
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch Latest Insight",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Latest Insight": {
+            "main": [
+                [
+                    {
+                        "node": "Extract Insight",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Extract Insight": {
+            "main": [
+                [
+                    {
+                        "node": "Check Insight Exists",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Insight Exists": {
+            "main": [
+                [
+                    {
+                        "node": "Generate X Post via Groq",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate X Post via Groq": {
+            "main": [
+                [
+                    {
+                        "node": "Parse Generated Post",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Parse Generated Post": {
+            "main": [
+                [
+                    {
+                        "node": "Save Post to Supabase",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": null,
+    "versionId": "9d72e9a1-3217-4113-9bdb-fca27a639e17",
+    "activeVersionId": null,
+    "versionCounter": 1,
+    "triggerCount": 0,
+    "shared": [
+        {
+            "updatedAt": "2026-03-24T18:32:05.929Z",
+            "createdAt": "2026-03-24T18:32:05.929Z",
+            "role": "workflow:owner",
+            "workflowId": "NsyBs060udg2glkY",
+            "projectId": "7u5oTwfYTRLwiYwv",
+            "project": {
+                "updatedAt": "2026-03-10T01:16:44.803Z",
+                "createdAt": "2026-01-22T05:47:18.802Z",
+                "id": "7u5oTwfYTRLwiYwv",
+                "name": "Carlos Lenis <clenis@optimaltech.ai>",
+                "type": "personal",
+                "icon": null,
+                "description": null,
+                "creatorId": "86778a2a-3026-426a-b9bc-e0e85f9e7d3f"
+            }
+        }
+    ],
+    "tags": [],
+    "activeVersion": null
+}
