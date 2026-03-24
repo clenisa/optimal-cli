@@ -117,8 +117,9 @@ import {
 import { getSupabase } from '../lib/supabase.js'
 import { wrapCommand } from '../lib/errors.js'
 import {
-  getPipelineStatus, generatePost, approvePost, listPosts,
+  getPipelineStatus, generatePost, approvePost, publishPost, listPosts,
 } from '../lib/content/pipeline.js'
+import { syncToStrapi } from '../lib/content/strapi-sync.js'
 import { execFileSync } from 'node:child_process'
 
 // Dynamic version from package.json (works in published package)
@@ -659,6 +660,8 @@ Subcommands:
   content pipeline status         Show pipeline status (scraped/insights/posts)
   content pipeline generate       Generate AI post from latest insight
   content pipeline approve        Approve a draft post for Strapi sync
+  content pipeline publish        Publish an approved post to X/Twitter
+  content pipeline sync           Sync approved posts to Strapi CMS
   content pipeline list           List generated posts with filters
 
 Examples:
@@ -704,12 +707,16 @@ Subcommands:
   content pipeline status                      Show pipeline status
   content pipeline generate --platform twitter  Generate a post via AI
   content pipeline approve --id <uuid>          Approve a draft post
+  content pipeline publish --id <uuid>          Publish approved post to platform
+  content pipeline sync                         Sync approved posts to Strapi
   content pipeline list [--status draft]        List generated posts
 
 Examples:
   $ optimal content pipeline status
   $ optimal content pipeline generate --platform facebook --topic openclaw
   $ optimal content pipeline approve --id abc123
+  $ optimal content pipeline publish --id abc123
+  $ optimal content pipeline sync
   $ optimal content pipeline list --status draft --platform twitter
 `)
 
@@ -730,6 +737,7 @@ contentPipeline.command('status').description('Show content pipeline status: scr
   console.log(`\n  ${colorize('Generated Posts', 'cyan')}`)
   console.log(`    Draft:    ${colorize(String(status.generatedPosts.draft), 'yellow')}`)
   console.log(`    Approved: ${colorize(String(status.generatedPosts.approved), 'blue')}`)
+  console.log(`    In Strapi:${colorize(String(status.generatedPosts.synced_to_strapi), 'cyan')}`)
   console.log(`    Posted:   ${colorize(String(status.generatedPosts.posted), 'green')}`)
   console.log(`    Failed:   ${colorize(String(status.generatedPosts.failed), 'red')}`)
   console.log(`    Total:    ${colorize(String(status.generatedPosts.total), 'bold')}`)
@@ -791,6 +799,38 @@ contentPipeline.command('list').description('List generated posts with optional 
   console.log(fmtTable(headers, rows))
   console.log(`  ${posts.length} post(s) found\n`)
 }, 'content-pipeline-list'))
+
+contentPipeline.command('publish').description('Publish an approved post to its platform (X/Twitter)').requiredOption('--id <uuid>', 'Post UUID to publish').action(wrapCommand(async (opts: { id: string }) => {
+  fmtInfo(`Publishing post ${opts.id}...`)
+  const result = await publishPost(opts.id)
+  success(`Post published! Platform post ID: ${colorize(result.platform_post_id, 'cyan')}`)
+}, 'content-pipeline-publish'))
+
+contentPipeline.command('sync').description('Sync approved posts from Supabase to Strapi for editorial review').action(wrapCommand(async () => {
+  fmtInfo('Syncing approved posts to Strapi...')
+  const result = await syncToStrapi()
+
+  if (result.synced === 0 && result.failed === 0 && result.skipped === 0) {
+    fmtInfo('No approved posts to sync')
+    return
+  }
+
+  console.log(colorize('\n  Strapi Sync Results', 'bold'))
+  console.log(colorize('  ══════════════════════════════════════', 'dim'))
+  console.log(`    Synced:  ${colorize(String(result.synced), 'green')}`)
+  console.log(`    Skipped: ${colorize(String(result.skipped), 'yellow')}`)
+  console.log(`    Failed:  ${colorize(String(result.failed), 'red')}`)
+
+  for (const d of result.details) {
+    const badge = d.status === 'synced' ? colorize('OK', 'green')
+      : d.status === 'skipped' ? colorize('SKIP', 'yellow')
+      : colorize('FAIL', 'red')
+    const extra = d.strapiDocumentId ? ` -> ${d.strapiDocumentId}` : ''
+    const errMsg = d.error ? ` (${d.error})` : ''
+    console.log(`    ${badge} | ${d.id.substring(0, 8)}${extra}${errMsg}`)
+  }
+  console.log()
+}, 'content-pipeline-sync'))
 
 
 // ═══════════════════════════════════════════════════════════════════════

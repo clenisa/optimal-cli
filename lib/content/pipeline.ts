@@ -5,17 +5,19 @@
  *   getPipelineStatus()     — Aggregate stats across all content tables
  *   generatePost()          — Generate a post for a given platform/topic via Groq
  *   approvePost()           — Mark a generated post as 'approved'
+ *   publishPost()           — Publish an approved post to its platform (X, etc.)
  *   listPosts()             — List generated posts with optional filters
  */
 
 import { getSupabase } from '../supabase.js'
+import { postTweet, getTwitterConfig, type TwitterConfig } from '../social/twitter.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
 export interface PipelineStatus {
   scrapedItems: { last24h: number; total: number }
   insights: { last7d: number; total: number }
-  generatedPosts: { draft: number; approved: number; posted: number; failed: number; total: number }
+  generatedPosts: { draft: number; approved: number; synced_to_strapi: number; posted: number; failed: number; total: number }
   campaign: { id: string; name: string; topic: string; status: string } | null
 }
 
@@ -93,7 +95,7 @@ export async function getPipelineStatus(): Promise<PipelineStatus> {
     .from('content_generated_posts')
     .select('status')
 
-  const statusCounts = { draft: 0, approved: 0, posted: 0, failed: 0, total: 0 }
+  const statusCounts = { draft: 0, approved: 0, synced_to_strapi: 0, posted: 0, failed: 0, total: 0 }
   for (const row of postCounts || []) {
     const s = row.status as keyof typeof statusCounts
     if (s in statusCounts) statusCounts[s]++
@@ -218,6 +220,111 @@ export async function approvePost(id: string): Promise<void> {
     .eq('id', id)
 
   if (updateErr) throw new Error(`Failed to approve post: ${updateErr.message}`)
+}
+
+// ── publishPost ─────────────────────────────────────────────────────
+
+/**
+ * Publish an approved post to its target platform.
+ *
+ * Currently supports: twitter (X)
+ * Future: facebook, instagram (via existing meta.ts)
+ *
+ * Requires OAuth 1.0a credentials for X (see lib/social/twitter.ts).
+ * Updates status to 'posted' with platform_post_id on success,
+ * or 'failed' on error.
+ *
+ * @param id — UUID of a content_generated_posts row with status 'approved'
+ * @returns platform_post_id from the target platform
+ *
+ * @example
+ *   const result = await publishPost('abc-123-def')
+ *   console.log(`Published: ${result.platform_post_id}`)
+ */
+export async function publishPost(id: string): Promise<{ platform_post_id: string }> {
+  const sb = getSupabase('optimal')
+
+  // Fetch the post
+  const { data: rows, error: fetchErr } = await sb
+    .from('content_generated_posts')
+    .select('*')
+    .eq('id', id)
+    .limit(1)
+
+  if (fetchErr) throw new Error(`Failed to fetch post: ${fetchErr.message}`)
+  if (!rows?.length) throw new Error(`Post not found: ${id}`)
+
+  const post = rows[0]
+  const status = post.status as string
+  const platform = post.platform as string
+  const content = (post.content as string) ?? ''
+
+  if (status !== 'approved') {
+    throw new Error(
+      `Post status is '${status}', can only publish 'approved' posts. ` +
+      `Pipeline: draft -> approved -> posted`,
+    )
+  }
+
+  if (!content.trim()) {
+    throw new Error('Post has no content')
+  }
+
+  let platformPostId: string
+
+  switch (platform) {
+    case 'twitter': {
+      let twitterConfig: TwitterConfig
+      try {
+        twitterConfig = getTwitterConfig()
+      } catch (err) {
+        // Mark as failed with a descriptive message about missing tokens
+        await sb
+          .from('content_generated_posts')
+          .update({ status: 'failed' })
+          .eq('id', id)
+        throw err
+      }
+
+      try {
+        const tweet = await postTweet(content, twitterConfig)
+        platformPostId = tweet.id
+      } catch (err) {
+        await sb
+          .from('content_generated_posts')
+          .update({ status: 'failed' })
+          .eq('id', id)
+        throw new Error(
+          `Failed to post tweet: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+      break
+    }
+    // Future platforms:
+    // case 'facebook':
+    // case 'instagram':
+    //   Use lib/social/meta.ts publishIgPhoto() or similar
+    default:
+      throw new Error(
+        `Unsupported platform for direct publish: '${platform}'. ` +
+        `Supported: twitter. For Instagram, use "optimal content social instagram".`,
+      )
+  }
+
+  // Update post status to 'posted'
+  const { error: updateErr } = await sb
+    .from('content_generated_posts')
+    .update({
+      status: 'posted',
+      posted_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+
+  if (updateErr) {
+    console.warn(`Warning: Tweet posted (${platformPostId}) but Supabase update failed: ${updateErr.message}`)
+  }
+
+  return { platform_post_id: platformPostId }
 }
 
 // ── listPosts ────────────────────────────────────────────────────────
