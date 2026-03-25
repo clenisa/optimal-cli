@@ -119,14 +119,10 @@ export function gatherHeartbeat(nameOverride?: string): Record<string, unknown> 
   const name = nameOverride || hostname
 
   const services = getServices()
-  // Only count running services for health — stopped services on machines
-  // that don't run them (e.g., no strapi/n8n on non-Pi machines) shouldn't
-  // mark the instance as degraded. If there are zero running services,
-  // it's offline. If at least one is running, it's online.
-  const runningCount = services.filter(s => s.status === 'running').length
-  const allRunning = runningCount > 0 && services.every(s => s.status === 'running')
-  const someRunning = runningCount > 0
-  const healthStatus = allRunning ? 'online' : someRunning ? 'degraded' : 'offline'
+  // Status = "online" means the bot is alive, sending heartbeats, and passed doctor.
+  // Services are informational only — they don't affect health status.
+  // The server-side API determines online/degraded/offline based on heartbeat age.
+  const healthStatus = 'online'
 
   return {
     name,
