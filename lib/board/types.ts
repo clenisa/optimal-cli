@@ -106,13 +106,19 @@ export interface CreateTaskInput {
 }
 
 export interface UpdateTaskInput {
+  title?: string
   status?: TaskStatus
   priority?: Priority
   assigned_to?: string | null
   claimed_by?: string | null
   claimed_at?: string | null
   milestone_id?: string | null
+  project_id?: string
   description?: string
+  source_repo?: string | null
+  target_module?: string | null
+  estimated_effort?: Effort | null
+  due_date?: string | null
   completed_at?: string | null
 }
 
