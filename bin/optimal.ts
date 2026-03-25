@@ -164,7 +164,8 @@ Examples:
   $ optimal agent coordinate                         Run coordinator loop
   $ optimal tx ingest --file bank.csv --user-id <uuid>
   $ optimal infra deploy dashboard --prod            Deploy to production
-  $ optimal infra doctor                             Full environment diagnostic
+  $ optimal doctor                                   Onboarding, setup & diagnostics
+  $ optimal doctor --fix                             Auto-fix: register, install cron
   $ optimal sync discord:init                        Init Discord channels
 
 Legacy commands (deprecated, use domain groups instead):
@@ -309,17 +310,29 @@ board
   .description('Update a task')
   .requiredOption('--id <uuid>', 'Task ID')
   .option('-s, --status <status>', 'New status')
+  .option('-t, --title <title>', 'New title')
   .option('-a, --agent <name>', 'Assign to agent')
   .option('--assigned-to <name>', 'Assign to agent (alias for -a/--agent)')
   .option('--priority <n>', 'New priority')
+  .option('--project <uuid>', 'Project ID')
+  .option('--due-date <YYYY-MM-DD>', 'Due date (or "none" to clear)')
+  .option('--source-repo <repo>', 'Source repo')
+  .option('--target-module <module>', 'Target module')
+  .option('--effort <s|m|l>', 'Estimated effort')
   .option('-m, --message <msg>', 'Log message (adds comment)')
   .action(async (opts) => {
-    // Support both -a/--agent and --assigned-to
     const assignedTo = opts.agent ?? opts.assignedTo
     const updates: Record<string, unknown> = {}
     if (opts.status) updates.status = opts.status
+    if (opts.title) updates.title = opts.title
     if (assignedTo) updates.assigned_to = assignedTo
     if (opts.priority) updates.priority = parseInt(opts.priority)
+    if (opts.project) updates.project_id = opts.project
+    if (opts.dueDate === 'none') updates.due_date = null
+    else if (opts.dueDate) updates.due_date = opts.dueDate
+    if (opts.sourceRepo) updates.source_repo = opts.sourceRepo
+    if (opts.targetModule) updates.target_module = opts.targetModule
+    if (opts.effort) updates.estimated_effort = opts.effort
     if (opts.status === 'done') updates.completed_at = new Date().toISOString()
     const task = await updateTask(opts.id, updates, assignedTo ?? 'cli')
     if (opts.message) await addComment({ task_id: task.id, author: assignedTo ?? 'cli', body: opts.message })
@@ -976,16 +989,17 @@ tx.command('delete').description('Batch delete transactions or staging rows (saf
 const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor')
   .addHelpText('after', `
 Commands:
-  infra deploy [app] [--prod]    Deploy an app to Vercel
+  infra deploy [app] [--prod]         Deploy an app to Vercel
   infra migrate push|pending|create   Database migrations
-  infra health                   Run health check across all services
-  infra doctor                   Full environment diagnostic
+  infra health                        Run health check across all services
+  infra doctor [--fix] [--name <n>]   Setup, diagnose, and maintain instance
 
 Examples:
   $ optimal infra deploy dashboard --prod
   $ optimal infra migrate push --target returnpro
   $ optimal infra health
-  $ optimal infra doctor
+  $ optimal infra doctor --fix
+  $ optimal doctor                    (top-level alias)
 `)
 
 infra.command('deploy').description('Deploy an app to Vercel (preview or production)').argument('<app>', `App to deploy (${listApps().join(', ')})`).option('--prod', 'Deploy to production', false).action(async (app: string, opts: { prod: boolean }) => { fmtInfo(`Deploying ${colorize(app, 'cyan')}${opts.prod ? colorize(' (production)', 'yellow') : ' (preview)'}...`); try { const url = await deploy(app, opts.prod); success(`Deployed: ${colorize(url, 'green')}`) } catch (err) { const msg = err instanceof Error ? err.message : String(err); fmtError(`Deploy failed: ${msg}`); process.exit(1) } })
@@ -1000,173 +1014,34 @@ infraMigrate.command('create').description('Create a new empty migration file').
 
 infra.command('health').description('Run health check across all Optimal services').action(async () => { try { const output = await healthCheck(); console.log(output) } catch (err) { const msg = err instanceof Error ? err.message : String(err); console.error(`Health check failed: ${msg}`); process.exit(1) } })
 
-// infra doctor — Expanded environment diagnostic
+infra.command('heartbeat').description('Send instance heartbeat to the monitoring dashboard').option('--name <name>', 'Instance name (default: hostname)').option('--install', 'Install as cron job (every 5 min)').option('--dry-run', 'Show payload without sending').action(async (opts: { name?: string; install?: boolean; dryRun?: boolean }) => {
+  const { sendInstanceHeartbeat, gatherHeartbeat, installHeartbeatCron } = await import('../lib/infra/heartbeat.js')
+  try {
+    if (opts.install) {
+      const name = opts.name || (await import('node:os')).hostname()
+      const msg = installHeartbeatCron(name)
+      console.log(msg)
+      return
+    }
+    if (opts.dryRun) {
+      const payload = gatherHeartbeat(opts.name)
+      console.log(JSON.stringify(payload, null, 2))
+      return
+    }
+    const result = await sendInstanceHeartbeat(opts.name)
+    console.log(`Heartbeat sent: ${result.name} [${result.status}] ${result.services_count} services @ ${result.sent_at}`)
+  } catch (err) { console.error(`Heartbeat failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) }
+})
+
+// infra doctor — delegates to the comprehensive doctor module
 infra
   .command('doctor')
-  .description('Full environment diagnostic: tools, env vars, connectivity, board status')
-  .action(async () => {
-    console.log('\n  Environment\n')
-
-    // Check tools using execFileSync (safe: no user input, hardcoded commands)
-    const toolChecks = [
-      { name: 'Bun', cmd: 'bun', args: ['--version'] },
-      { name: 'pnpm', cmd: 'pnpm', args: ['--version'] },
-      { name: 'Git', cmd: 'git', args: ['--version'] },
-      { name: 'Node.js', cmd: 'node', args: ['--version'] },
-    ]
-
-    for (const { name, cmd, args } of toolChecks) {
-      try {
-        const ver = execFileSync(cmd, args, { encoding: 'utf-8', timeout: 5000 }).trim()
-        console.log(`    \x1b[32m[PASS]\x1b[0m ${name}: ${ver}`)
-      } catch {
-        console.log(`    \x1b[31m[FAIL]\x1b[0m ${name}: not found`)
-      }
-    }
-
-    // Check env vars
-    console.log('\n  Environment Variables\n')
-
-    const envChecks = [
-      { name: 'OPTIMAL_SUPABASE_URL', required: true },
-      { name: 'OPTIMAL_SUPABASE_SERVICE_KEY', required: true },
-      { name: 'RETURNPRO_SUPABASE_URL', required: true },
-      { name: 'RETURNPRO_SUPABASE_SERVICE_KEY', required: true },
-      { name: 'DISCORD_BOT_TOKEN', required: true },
-      { name: 'STRAPI_API_TOKEN', required: true },
-      { name: 'N8N_WEBHOOK_URL', required: true },
-      { name: 'GROQ_API_KEY', required: false },
-      { name: 'META_ACCESS_TOKEN', required: false },
-    ]
-
-    for (const { name, required } of envChecks) {
-      const val = process.env[name]
-      if (val) {
-        console.log(`    \x1b[32m[PASS]\x1b[0m ${name} set`)
-      } else if (required) {
-        console.log(`    \x1b[31m[FAIL]\x1b[0m ${name} not set (required)`)
-      } else {
-        console.log(`    \x1b[33m[WARN]\x1b[0m ${name} not set (optional)`)
-      }
-    }
-
-    // Check connectivity
-    console.log('\n  Connectivity\n')
-
-    try {
-      const supabase = getSupabase('optimal')
-      const { count } = await supabase.from('projects').select('*', { count: 'exact', head: true })
-      console.log(`    \x1b[32m[PASS]\x1b[0m OptimalOS Supabase reachable`)
-    } catch (err) {
-      console.log(`    \x1b[31m[FAIL]\x1b[0m OptimalOS Supabase unreachable`)
-    }
-
-    try {
-      const supabase = getSupabase('returnpro')
-      await supabase.from('dim_account').select('account_id', { count: 'exact', head: true })
-      console.log(`    \x1b[32m[PASS]\x1b[0m ReturnPro Supabase reachable`)
-    } catch {
-      console.log(`    \x1b[31m[FAIL]\x1b[0m ReturnPro Supabase unreachable`)
-    }
-
-    // Check Strapi
-    try {
-      const baseUrl = process.env.STRAPI_URL || 'https://strapi.optimal.miami'
-      const res = await fetch(`${baseUrl}/api/content-type-builder/content-types`, {
-        headers: { Authorization: `Bearer ${process.env.STRAPI_API_TOKEN}` },
-        signal: AbortSignal.timeout(5000),
-      })
-      console.log(`    \x1b[32m[PASS]\x1b[0m Strapi API responding`)
-    } catch {
-      console.log(`    \x1b[31m[FAIL]\x1b[0m Strapi API unreachable`)
-    }
-
-    // Check n8n webhooks
-    try {
-      const { checkN8nWebhooks } = await import('../lib/infra/n8n-health.js')
-      const webhooks = await checkN8nWebhooks()
-      for (const wh of webhooks) {
-        if (wh.status === 'ok') {
-          console.log(`    \x1b[32m[PASS]\x1b[0m n8n ${wh.name}`)
-        } else {
-          console.log(`    \x1b[33m[WARN]\x1b[0m n8n ${wh.name}: ${wh.status}`)
-        }
-      }
-    } catch {
-      console.log(`    \x1b[33m[WARN]\x1b[0m n8n health check skipped (module not found)`)
-    }
-
-    // Config file
-    console.log('\n  Config\n')
-    try {
-      const cfg = await readLocalConfig()
-      if (cfg) {
-        console.log(`    \x1b[32m[PASS]\x1b[0m Config found at ${getLocalConfigPath()}`)
-        console.log(`           profile: ${cfg.profile.name}, owner: ${cfg.profile.owner}`)
-      } else {
-        console.log(`    \x1b[33m[WARN]\x1b[0m No config at ${getLocalConfigPath()} (run: optimal sync config init)`)
-      }
-    } catch (e) {
-      console.log(`    \x1b[31m[FAIL]\x1b[0m Config error: ${e instanceof Error ? e.message : String(e)}`)
-    }
-
-    // Bot sync readiness
-    console.log('\n  Bot Sync\n')
-    const syncVars = ['OPTIMAL_AGENT_NAME', 'OPTIMAL_OWNER_EMAIL']
-    let syncReady = true
-    for (const key of syncVars) {
-      if (process.env[key]) {
-        console.log(`    \x1b[32m[PASS]\x1b[0m ${key}: ${process.env[key]}`)
-      } else {
-        console.log(`    \x1b[33m[WARN]\x1b[0m ${key}: not set`)
-        syncReady = false
-      }
-    }
-
-    if (syncReady) {
-      try {
-        const bots = await listRegisteredBots()
-        const agentName = process.env.OPTIMAL_AGENT_NAME!
-        const registered = bots.find(b => b.agent_name === agentName)
-        if (registered) {
-          console.log(`    \x1b[32m[PASS]\x1b[0m Registered: ${agentName} (${registered.is_admin ? 'admin' : 'bot'})`)
-        } else {
-          console.log(`    \x1b[33m[WARN]\x1b[0m Not registered: run 'optimal sync register --agent ${agentName}'`)
-        }
-      } catch {
-        console.log(`    \x1b[33m[WARN]\x1b[0m Could not check bot registration`)
-      }
-    }
-
-    // npm version
-    try {
-      const npmResult = await checkNpmVersion()
-      if (npmResult.latestVersion && npmResult.currentVersion) {
-        console.log(`\n  NPM\n`)
-        console.log(`    \x1b[36m[INFO]\x1b[0m optimal-cli: ${npmResult.currentVersion} → ${npmResult.latestVersion}`)
-        if (npmResult.hasNewMajor) {
-          console.log(`    \x1b[33m[WARN]\x1b[0m New major version available!`)
-        }
-      }
-    } catch { /* ignore npm check failures */ }
-
-    // Board status
-    console.log('\n  Board Status\n')
-    try {
-      const supabase = getSupabase('optimal')
-      const { data: tasks } = await supabase.from('tasks').select('status')
-      if (tasks) {
-        const counts: Record<string, number> = {}
-        for (const t of tasks) counts[t.status] = (counts[t.status] || 0) + 1
-        const total = tasks.length
-        const summary = Object.entries(counts).map(([s, c]) => `${c} ${s}`).join(', ')
-        console.log(`    \x1b[36m[INFO]\x1b[0m ${total} tasks (${summary})`)
-      }
-    } catch {
-      console.log(`    \x1b[33m[WARN]\x1b[0m Could not fetch board status`)
-    }
-
-    console.log('')
+  .description('Setup, diagnose, and maintain this optimal-cli instance')
+  .option('--name <name>', 'Instance name (default: hostname)')
+  .option('--fix', 'Auto-fix issues (install cron, register instance, etc.)')
+  .action(async (opts: { name?: string; fix?: boolean }) => {
+    const { runDoctor } = await import('../lib/infra/doctor.js')
+    await runDoctor({ name: opts.name, fix: opts.fix })
   })
 
 
@@ -1250,7 +1125,8 @@ program.command('delete-batch', { hidden: true }).description('[DEPRECATED] Use 
 // --- Infra aliases ---
 program.command('deploy', { hidden: true }).description('[DEPRECATED] Use "optimal infra deploy"').argument('<app>').option('--prod', '', false).action(async (app: string, opts: { prod: boolean }) => { deprecationWarning('deploy', 'infra deploy'); const url = await deploy(app, opts.prod); success(`Deployed: ${colorize(url, 'green')}`) })
 program.command('health-check', { hidden: true }).description('[DEPRECATED] Use "optimal infra health"').action(async () => { deprecationWarning('health-check', 'infra health'); console.log(await healthCheck()) })
-program.command('doctor', { hidden: true }).description('[DEPRECATED] Use "optimal infra doctor"').action(async () => { deprecationWarning('doctor', 'infra doctor'); console.log('Run "optimal infra doctor" for the full environment diagnostic.') })
+// Top-level doctor command — the primary onboarding tool
+program.command('doctor').description('Setup, diagnose, and maintain this optimal-cli instance').option('--name <name>', 'Instance name (default: hostname)').option('--fix', 'Auto-fix issues (install cron, register instance, etc.)').action(async (opts: { name?: string; fix?: boolean }) => { const { runDoctor } = await import('../lib/infra/doctor.js'); await runDoctor({ name: opts.name, fix: opts.fix }) })
 
 // --- Agent/Bot aliases ---
 program.command('bot', { hidden: true }).description('[DEPRECATED] Use "optimal agent"').action(() => { deprecationWarning('bot', 'agent'); console.log('Use "optimal agent <subcommand>" instead.') })
