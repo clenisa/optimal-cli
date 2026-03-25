@@ -13,6 +13,8 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { probeGatewayChannels } from './openclaw-probe.js'
+import { probeClaudeCode } from './claude-probe.js'
 
 export interface HeartbeatResult {
   name: string
@@ -129,6 +131,14 @@ function getConfigSnapshot(): Record<string, unknown> {
       mode: conf?.mode,
     }))
   } catch { /* no openclaw config */ }
+
+  // Rich channel details from gateway probe
+  const channelDetails = probeGatewayChannels()
+  if (channelDetails) snapshot.channel_details = channelDetails
+
+  // Claude Code session detection
+  const ccInfo = probeClaudeCode()
+  if (ccInfo) snapshot.claude_code = ccInfo
 
   return snapshot
 }

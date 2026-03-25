@@ -214,10 +214,23 @@ export function formatInstanceDetail(inst: InstanceInfo): string {
   lines.push(`    node:        ${(snapshot.node_version as string) || '--'}`)
   lines.push(`    bun:         ${(snapshot.bun_version as string) || '--'}`)
 
-  // Channels
-  const channels = inst.channels.length > 0 ? inst.channels.join(', ') : '--'
+  // Channels (with bot identity details if available)
   lines.push('')
-  lines.push(`  Channels: ${channels}`)
+  const channelDetails = snapshot.channel_details as Record<string, any> | undefined
+  if (channelDetails && Object.keys(channelDetails).length > 0) {
+    lines.push('  Channels:')
+    for (const [name, info] of Object.entries(channelDetails)) {
+      if (info?.username) {
+        const botId = info.botId ? ` (id: ${info.botId})` : ''
+        lines.push(`    ${pad(name, 12)}@${info.username}${botId}`)
+      } else if (info?.enabled) {
+        lines.push(`    ${pad(name, 12)}${colorize('enabled', 'green')}`)
+      }
+    }
+  } else {
+    const channels = inst.channels.length > 0 ? inst.channels.join(', ') : '--'
+    lines.push(`  Channels: ${channels}`)
+  }
 
   // Models
   const defaultModel = (snapshot.default_model as string) || ''
@@ -234,6 +247,22 @@ export function formatInstanceDetail(inst: InstanceInfo): string {
       const portStr = svc.port ? `  :${svc.port}` : ''
       const statusColor = svc.status === 'running' ? 'green' : 'red'
       lines.push(`    ${pad(svc.name, 14)}${colorize(svc.status, statusColor)}${portStr}`)
+    }
+  }
+
+  // Claude Code
+  const claudeCode = snapshot.claude_code as { version: string | null; active_sessions: number; sessions: Array<{ pid: number; sessionId: string; cwd: string; alive: boolean; startedAt: string }> } | undefined
+  if (claudeCode) {
+    lines.push('')
+    lines.push('  Claude Code:')
+    lines.push(`    version:  ${claudeCode.version || '--'}`)
+    lines.push(`    sessions: ${claudeCode.active_sessions} active`)
+    if (claudeCode.sessions && claudeCode.sessions.length > 0) {
+      for (const s of claudeCode.sessions.filter(s => s.alive)) {
+        const cwd = s.cwd ? ` in ${s.cwd}` : ''
+        const started = s.startedAt ? ` (since ${timeAgo(s.startedAt)})` : ''
+        lines.push(`      pid ${s.pid}${cwd}${started}`)
+      }
     }
   }
 
