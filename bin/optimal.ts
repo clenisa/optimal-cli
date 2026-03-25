@@ -986,19 +986,22 @@ tx.command('delete').description('Batch delete transactions or staging rows (saf
 // INFRA domain group — Deploy, migrate, health, doctor
 // ═══════════════════════════════════════════════════════════════════════
 
-const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor')
+const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor, instances')
   .addHelpText('after', `
 Commands:
   infra deploy [app] [--prod]         Deploy an app to Vercel
   infra migrate push|pending|create   Database migrations
   infra health                        Run health check across all services
   infra doctor [--fix] [--name <n>]   Setup, diagnose, and maintain instance
+  infra instances [--json] [--name]   List registered instances and their status
 
 Examples:
   $ optimal infra deploy dashboard --prod
   $ optimal infra migrate push --target returnpro
   $ optimal infra health
   $ optimal infra doctor --fix
+  $ optimal infra instances
+  $ optimal infra instances --name oracle
   $ optimal doctor                    (top-level alias)
 `)
 
@@ -1042,6 +1045,48 @@ infra
   .action(async (opts: { name?: string; fix?: boolean }) => {
     const { runDoctor } = await import('../lib/infra/doctor.js')
     await runDoctor({ name: opts.name, fix: opts.fix })
+  })
+
+// infra instances — list registered instances and their live status
+infra
+  .command('instances')
+  .description('List registered instances and their live status')
+  .option('--json', 'Output as JSON', false)
+  .option('--name <name>', 'Show detail for a single instance')
+  .action(async (opts: { json?: boolean; name?: string }) => {
+    const { listInstances, getInstanceStatus, formatInstanceTable, formatInstanceDetail } = await import('../lib/infra/instances.js')
+    try {
+      if (opts.name) {
+        const inst = await getInstanceStatus(opts.name)
+        if (!inst) {
+          console.error(`Instance "${opts.name}" not found`)
+          process.exit(1)
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(inst, null, 2))
+        } else {
+          console.log('')
+          console.log(formatInstanceDetail(inst))
+          console.log('')
+        }
+      } else {
+        const instances = await listInstances()
+        if (instances.length === 0) {
+          console.log('No instances registered. Run "optimal doctor --fix" to register this instance.')
+          return
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(instances, null, 2))
+        } else {
+          console.log('')
+          console.log(formatInstanceTable(instances))
+          console.log('')
+        }
+      }
+    } catch (err) {
+      console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
   })
 
 
