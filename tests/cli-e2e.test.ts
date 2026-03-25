@@ -100,9 +100,8 @@ describe('optimal bot --help', () => {
 describe('optimal config --help', () => {
   it('lists config subcommands', () => {
     const out = cli('config --help')
-    assert.match(out, /init/, 'should list init')
-    assert.match(out, /doctor/, 'should list doctor')
-    assert.match(out, /sync/, 'should list sync')
+    assert.match(out, /seed-shared/, 'should list seed-shared')
+    assert.match(out, /pull-shared/, 'should list pull-shared')
   })
 })
 

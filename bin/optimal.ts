@@ -167,6 +167,9 @@ Examples:
   $ optimal doctor                                   Onboarding, setup & diagnostics
   $ optimal doctor --fix                             Auto-fix: register, install cron
   $ optimal sync discord:init                        Init Discord channels
+  $ optimal login                                    Authenticate with Supabase
+  $ optimal config seed-shared                       Push .env vars to shared store
+  $ optimal config pull-shared                       Pull shared vars to local .env
 
 Legacy commands (deprecated, use domain groups instead):
   $ optimal audit-financials --months 2025-01
@@ -1127,6 +1130,129 @@ asset.command('usage').description('View usage log for an asset').requiredOption
 
 
 // ═══════════════════════════════════════════════════════════════════════
+// AUTH commands — login, logout
+// ═══════════════════════════════════════════════════════════════════════
+
+program
+  .command('login')
+  .description('Authenticate with Supabase (email + password)')
+  .option('--email <email>', 'Email address (prompts if omitted)')
+  .option('--password <password>', 'Password (prompts if omitted)')
+  .action(wrapCommand(async (opts: { email?: string; password?: string }) => {
+    const readline = await import('node:readline/promises')
+
+    let email = opts.email
+    let password = opts.password
+
+    if (!email || !password) {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+      try {
+        if (!email) email = (await rl.question('Email: ')).trim()
+        if (!password) password = (await rl.question('Password: ')).trim()
+      } finally {
+        rl.close()
+      }
+    }
+
+    if (!email || !password) {
+      fmtError('Email and password are required.')
+      process.exit(1)
+    }
+
+    const { login } = await import('../lib/auth/login.js')
+    const auth = await login(email, password)
+    success(`Logged in as ${colorize(auth.email, 'cyan')} (user: ${colorize(auth.user_id.slice(0, 8) + '...', 'dim')})`)
+  }, 'login'))
+
+program
+  .command('logout')
+  .description('Clear cached authentication')
+  .action(wrapCommand(async () => {
+    const { logout, isLoggedIn } = await import('../lib/auth/login.js')
+    if (!isLoggedIn()) {
+      fmtInfo('Not currently logged in.')
+      return
+    }
+    await logout()
+    success('Logged out. Cached tokens cleared.')
+  }, 'logout'))
+
+// ═══════════════════════════════════════════════════════════════════════
+// CONFIG domain group — shared env sync
+// ═══════════════════════════════════════════════════════════════════════
+
+const config = program.command('config').description('Configuration management: shared env sync')
+  .addHelpText('after', `
+Commands:
+  config seed-shared     Push .env vars to shared_env_vars (admin)
+  config pull-shared     Pull shared vars and write to local .env
+
+Examples:
+  $ optimal config seed-shared
+  $ optimal config pull-shared
+  $ optimal config pull-shared --email clenis@optimaltech.ai
+`)
+
+config
+  .command('seed-shared')
+  .description('Push local .env vars to shared_env_vars table (service_role)')
+  .option('--env-file <path>', 'Path to .env file', '.env')
+  .action(wrapCommand(async (opts: { envFile: string }) => {
+    const { resolve } = await import('node:path')
+    const envPath = resolve(opts.envFile)
+    const { existsSync } = await import('node:fs')
+    if (!existsSync(envPath)) {
+      fmtError(`File not found: ${envPath}`)
+      process.exit(1)
+    }
+
+    const { seedSharedEnv } = await import('../lib/config/shared-env.js')
+    const count = await seedSharedEnv(envPath)
+    success(`Seeded ${colorize(String(count), 'cyan')} env vars to shared store`)
+  }, 'config:seed-shared'))
+
+config
+  .command('pull-shared')
+  .description('Pull shared env vars and merge into local .env')
+  .option('--email <email>', 'Owner email to pull from (defaults to OPTIMAL_OWNER_EMAIL or cached auth)')
+  .option('--env-file <path>', 'Path to .env file to write', '.env')
+  .action(wrapCommand(async (opts: { email?: string; envFile: string }) => {
+    const { resolve } = await import('node:path')
+    const envPath = resolve(opts.envFile)
+    const { getCachedAuth } = await import('../lib/auth/login.js')
+    const { pullSharedEnv } = await import('../lib/config/shared-env.js')
+    const { writeEnvVar } = await import('../lib/infra/env-setup.js')
+
+    // Determine email: flag > env > cached auth
+    const email = opts.email
+      || process.env.OPTIMAL_OWNER_EMAIL
+      || getCachedAuth()?.email
+
+    if (!email) {
+      fmtError('Cannot determine owner email. Use --email, set OPTIMAL_OWNER_EMAIL, or run "optimal login" first.')
+      process.exit(1)
+    }
+
+    fmtInfo(`Pulling shared env for ${colorize(email, 'cyan')}...`)
+    const vars = await pullSharedEnv(email)
+    const keys = Object.keys(vars)
+
+    if (keys.length === 0) {
+      fmtWarn('No shared env vars found for this owner.')
+      return
+    }
+
+    for (const [key, value] of Object.entries(vars)) {
+      writeEnvVar(envPath, key, value)
+    }
+
+    success(`Pulled ${colorize(String(keys.length), 'cyan')} vars into ${colorize(envPath, 'dim')}`)
+    for (const key of keys) {
+      console.log(`  ${colorize(key, 'green')}`)
+    }
+  }, 'config:pull-shared'))
+
+// ═══════════════════════════════════════════════════════════════════════
 // BACKWARD-COMPATIBLE HIDDEN ALIASES
 //
 // Every command that was moved to a domain group keeps its old name as a
@@ -1180,8 +1306,8 @@ program.command('coordinator', { hidden: true }).description('[DEPRECATED] Use "
 // --- Migrate alias ---
 program.command('migrate', { hidden: true }).description('[DEPRECATED] Use "optimal infra migrate"').action(() => { deprecationWarning('migrate', 'infra migrate'); console.log('Use "optimal infra migrate <push|pending|create>" instead.') })
 
-// --- Config alias ---
-program.command('config', { hidden: true }).description('[DEPRECATED] Use "optimal sync config"').action(() => { deprecationWarning('config', 'sync config'); console.log('Config commands moved under "optimal sync config".') })
+// --- Config alias (legacy sync config commands are under "optimal sync config") ---
+// Note: "optimal config" now handles shared env sync; legacy config is at "optimal sync config"
 
 
 // ═══════════════════════════════════════════════════════════════════════
