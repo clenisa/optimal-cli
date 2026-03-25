@@ -64,11 +64,15 @@ function getServices(): Array<{ name: string; port?: number; status: string }> {
 
   for (const svc of checks) {
     const active = run('systemctl', ['is-active', svc.unit])
-    services.push({
-      name: svc.name,
-      port: svc.port,
-      status: active === 'active' ? 'running' : 'stopped',
-    })
+    // Only include services that exist on this machine
+    // "inactive" means installed but stopped, "" means not installed at all
+    if (active === 'active' || active === 'inactive' || active === 'failed') {
+      services.push({
+        name: svc.name,
+        port: svc.port,
+        status: active === 'active' ? 'running' : 'stopped',
+      })
+    }
   }
 
   // Docker containers
@@ -115,8 +119,13 @@ export function gatherHeartbeat(nameOverride?: string): Record<string, unknown> 
   const name = nameOverride || hostname
 
   const services = getServices()
-  const allRunning = services.filter(s => !s.name.startsWith('docker:')).every(s => s.status === 'running')
-  const someRunning = services.some(s => s.status === 'running')
+  // Only count running services for health — stopped services on machines
+  // that don't run them (e.g., no strapi/n8n on non-Pi machines) shouldn't
+  // mark the instance as degraded. If there are zero running services,
+  // it's offline. If at least one is running, it's online.
+  const runningCount = services.filter(s => s.status === 'running').length
+  const allRunning = runningCount > 0 && services.every(s => s.status === 'running')
+  const someRunning = runningCount > 0
   const healthStatus = allRunning ? 'online' : someRunning ? 'degraded' : 'offline'
 
   return {
