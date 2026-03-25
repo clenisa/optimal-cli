@@ -109,7 +109,26 @@ function getConfigSnapshot(): Record<string, unknown> {
     const oc = JSON.parse(readFileSync(join(process.env.HOME || '', '.openclaw', 'openclaw.json'), 'utf-8'))
     snapshot.gateway_port = oc.gateway?.port
     snapshot.gateway_mode = oc.gateway?.mode
-  } catch { /* no config */ }
+
+    // Channels enabled
+    const channels = oc.channels || {}
+    snapshot.channels = Object.entries(channels)
+      .filter(([, conf]: [string, any]) => conf?.enabled)
+      .map(([name]) => name)
+
+    // Model providers configured
+    const modelProviders = oc.models?.providers || {}
+    snapshot.model_providers = Object.keys(modelProviders)
+    snapshot.default_model = oc.defaultModel || null
+
+    // Auth profiles (which AI providers are authenticated)
+    const authProfiles = oc.auth?.profiles || {}
+    snapshot.auth_providers = Object.entries(authProfiles).map(([name, conf]: [string, any]) => ({
+      name,
+      provider: conf?.provider,
+      mode: conf?.mode,
+    }))
+  } catch { /* no openclaw config */ }
 
   return snapshot
 }
@@ -126,9 +145,9 @@ export function gatherHeartbeat(nameOverride?: string): Record<string, unknown> 
 
   return {
     name,
-    owner_email: process.env.OPTIMAL_CONFIG_OWNER
-      ? `${process.env.OPTIMAL_CONFIG_OWNER}@optimaltech.ai`
-      : 'unknown',
+    // Owner = the person who paired/claimed this instance, NOT the instance name
+    owner_email: process.env.OPTIMAL_OWNER_EMAIL
+      || 'clenis@optimaltech.ai',
     hostname,
     platform: `${run('uname', ['-s'])}_${run('uname', ['-m'])}`.toLowerCase(),
     openclaw_version: getOpenClawVersion(),
