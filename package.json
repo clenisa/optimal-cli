@@ -1,6 +1,6 @@
 {
   "name": "optimal-cli",
-  "version": "2.1.3",
+  "version": "2.2.0",
   "description": "Optimal CLI \u2014 unified command-line interface for bot orchestration, financial analytics, content management, and infrastructure",
   "type": "module",
   "bin": {
