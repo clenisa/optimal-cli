@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { probeGatewayChannels } from './openclaw-probe.js'
 import { probeClaudeCode } from './claude-probe.js'
+import { getRepoStatuses } from './repo-status.js'
 
 export interface HeartbeatResult {
   name: string
@@ -139,6 +140,9 @@ function getConfigSnapshot(): Record<string, unknown> {
   // Claude Code session detection
   const ccInfo = probeClaudeCode()
   if (ccInfo) snapshot.claude_code = ccInfo
+
+  // Git repo statuses
+  snapshot.repos = getRepoStatuses()
 
   return snapshot
 }

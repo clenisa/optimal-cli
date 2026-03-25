@@ -989,7 +989,7 @@ tx.command('delete').description('Batch delete transactions or staging rows (saf
 // INFRA domain group — Deploy, migrate, health, doctor
 // ═══════════════════════════════════════════════════════════════════════
 
-const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor, instances')
+const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor, instances, repos')
   .addHelpText('after', `
 Commands:
   infra deploy [app] [--prod]         Deploy an app to Vercel
@@ -997,6 +997,7 @@ Commands:
   infra health                        Run health check across all services
   infra doctor [--fix] [--name <n>]   Setup, diagnose, and maintain instance
   infra instances [--json] [--name]   List registered instances and their status
+  infra repos [--json]                Show git repo status and Vercel deployments
 
 Examples:
   $ optimal infra deploy dashboard --prod
@@ -1004,6 +1005,7 @@ Examples:
   $ optimal infra health
   $ optimal infra doctor --fix
   $ optimal infra instances
+  $ optimal infra repos
   $ optimal infra instances --name oracle
   $ optimal doctor                    (top-level alias)
 `)
@@ -1038,6 +1040,29 @@ infra.command('heartbeat').description('Send instance heartbeat to the monitorin
     console.log(`Heartbeat sent: ${result.name} [${result.status}] ${result.services_count} services @ ${result.sent_at}`)
   } catch (err) { console.error(`Heartbeat failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) }
 })
+
+// infra repos — show git repo status + Vercel deployments
+infra
+  .command('repos')
+  .description('Show git repo status and Vercel deployment status')
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts: { json?: boolean }) => {
+    const { getRepoStatuses } = await import('../lib/infra/repo-status.js')
+    const { getVercelDeployments } = await import('../lib/infra/vercel-status.js')
+    const { formatRepoTable } = await import('../lib/infra/repo-format.js')
+    try {
+      const repos = getRepoStatuses()
+      const deployments = getVercelDeployments()
+      if (opts.json) {
+        console.log(JSON.stringify({ repos, deployments }, null, 2))
+        return
+      }
+      console.log(formatRepoTable(repos, deployments))
+    } catch (err) {
+      console.error(`Repo status failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
 
 // infra doctor — delegates to the comprehensive doctor module
 infra
@@ -1176,6 +1201,193 @@ program
     await logout()
     success('Logged out. Cached tokens cleared.')
   }, 'logout'))
+
+// ═══════════════════════════════════════════════════════════════════════
+// ADMIN domain group — profile, users, env export/import
+// ═══════════════════════════════════════════════════════════════════════
+
+const admin = program.command('admin').description('Admin operations: profile, users, env management')
+  .addHelpText('after', `
+Commands:
+  admin profile                   Show current user profile
+  admin users                     List all users (admin only)
+  admin env list                  List all shared env vars (redacted)
+  admin env export                Export shared env as .env format
+  admin env import --file <path>  Import .env file to shared store
+
+Examples:
+  $ optimal admin profile
+  $ optimal admin users
+  $ optimal admin env list
+  $ optimal admin env export > backup.env
+  $ optimal admin env import --file backup.env
+`)
+
+admin
+  .command('profile')
+  .description('Show current user profile summary')
+  .action(wrapCommand(async () => {
+    const { getCachedAuth } = await import('../lib/auth/login.js')
+    const { getProfile } = await import('../lib/admin/index.js')
+
+    const auth = getCachedAuth()
+    if (!auth) {
+      fmtError('Not logged in. Run "optimal login" first.')
+      process.exit(1)
+    }
+
+    const profile = await getProfile(auth.email)
+
+    console.log('')
+    console.log(`  ${colorize('Profile', 'bold')}`)
+    console.log(`  ${'─'.repeat(40)}`)
+    console.log(`  Email:        ${colorize(profile.email, 'cyan')}`)
+    console.log(`  Role:         ${colorize(profile.role, profile.role === 'admin' ? 'green' : 'blue')}`)
+    console.log(`  Instances:    ${profile.instances.length > 0 ? profile.instances.join(', ') : colorize('none', 'dim')}`)
+    console.log(`  Shared vars:  ${colorize(String(profile.shared_vars_count), 'cyan')}`)
+    console.log(`  Credentials:  ${colorize(String(profile.credentials_count), 'yellow')}`)
+    console.log('')
+  }, 'admin:profile'))
+
+admin
+  .command('users')
+  .description('List all registered users (admin only)')
+  .action(wrapCommand(async () => {
+    const { getCachedAuth } = await import('../lib/auth/login.js')
+    const { listUsers, isAdmin } = await import('../lib/admin/index.js')
+
+    const auth = getCachedAuth()
+    if (!auth) {
+      fmtError('Not logged in. Run "optimal login" first.')
+      process.exit(1)
+    }
+
+    if (!(await isAdmin(auth.email))) {
+      fmtError('Admin access required. This command is restricted.')
+      process.exit(1)
+    }
+
+    const users = await listUsers()
+
+    if (users.length === 0) {
+      fmtInfo('No users found.')
+      return
+    }
+
+    const rows = users.map(u => [
+      u.email,
+      colorize(u.role, u.role === 'admin' ? 'green' : 'blue'),
+      u.joined_at ? new Date(u.joined_at).toLocaleDateString() : 'unknown',
+    ])
+
+    console.log(fmtTable(['Email', 'Role', 'Joined'], rows))
+    console.log(`\n${colorize(String(users.length), 'cyan')} users total`)
+  }, 'admin:users'))
+
+// ── admin env subgroup ──────────────────────────────────────────────────
+
+const adminEnv = admin.command('env').description('Shared env variable management')
+
+adminEnv
+  .command('list')
+  .description('List all shared env vars with redacted secrets')
+  .action(wrapCommand(async () => {
+    const { getCachedAuth } = await import('../lib/auth/login.js')
+    const { isAdmin } = await import('../lib/admin/index.js')
+    const { listSharedEnv } = await import('../lib/config/shared-env.js')
+
+    const auth = getCachedAuth()
+    if (!auth) {
+      fmtError('Not logged in. Run "optimal login" first.')
+      process.exit(1)
+    }
+
+    if (!(await isAdmin(auth.email))) {
+      fmtError('Admin access required. This command is restricted.')
+      process.exit(1)
+    }
+
+    const vars = await listSharedEnv()
+
+    if (vars.length === 0) {
+      fmtInfo('No shared env vars found.')
+      return
+    }
+
+    const rows = vars.map(v => [
+      v.key,
+      v.is_secret ? colorize('<redacted>', 'dim') : v.value,
+      v.is_secret ? colorize('secret', 'yellow') : colorize('public', 'green'),
+    ])
+
+    console.log(fmtTable(['Key', 'Value', 'Type'], rows))
+    console.log(`\n${colorize(String(vars.length), 'cyan')} vars total (${vars.filter(v => v.is_secret).length} secrets)`)
+  }, 'admin:env:list'))
+
+adminEnv
+  .command('export')
+  .description('Export shared env vars as .env format (secrets redacted)')
+  .option('--email <email>', 'Owner email (defaults to cached auth)')
+  .action(wrapCommand(async (opts: { email?: string }) => {
+    const { getCachedAuth } = await import('../lib/auth/login.js')
+    const { isAdmin } = await import('../lib/admin/index.js')
+    const { exportEnv } = await import('../lib/admin/env-export.js')
+
+    const auth = getCachedAuth()
+    if (!auth) {
+      fmtError('Not logged in. Run "optimal login" first.')
+      process.exit(1)
+    }
+
+    if (!(await isAdmin(auth.email))) {
+      fmtError('Admin access required. This command is restricted.')
+      process.exit(1)
+    }
+
+    const email = opts.email || auth.email
+    const content = await exportEnv(email)
+    process.stdout.write(content)
+  }, 'admin:env:export'))
+
+adminEnv
+  .command('import')
+  .description('Import .env file into shared env store (admin only)')
+  .requiredOption('--file <path>', 'Path to .env file to import')
+  .action(wrapCommand(async (opts: { file: string }) => {
+    const { resolve } = await import('node:path')
+    const { existsSync, readFileSync: readFile } = await import('node:fs')
+    const { getCachedAuth } = await import('../lib/auth/login.js')
+    const { isAdmin } = await import('../lib/admin/index.js')
+    const { importEnv } = await import('../lib/admin/env-export.js')
+
+    const auth = getCachedAuth()
+    if (!auth) {
+      fmtError('Not logged in. Run "optimal login" first.')
+      process.exit(1)
+    }
+
+    if (!(await isAdmin(auth.email))) {
+      fmtError('Admin access required. This command is restricted.')
+      process.exit(1)
+    }
+
+    const filePath = resolve(opts.file)
+    if (!existsSync(filePath)) {
+      fmtError(`File not found: ${filePath}`)
+      process.exit(1)
+    }
+
+    const content = readFile(filePath, 'utf-8')
+    const result = await importEnv(content, auth.email)
+
+    if (result.errors.length > 0) {
+      for (const err of result.errors) {
+        fmtWarn(err)
+      }
+    }
+
+    success(`Imported ${colorize(String(result.imported), 'cyan')} vars, skipped ${colorize(String(result.skipped), 'dim')}`)
+  }, 'admin:env:import'))
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIG domain group — shared env sync
