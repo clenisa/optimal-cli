@@ -162,3 +162,69 @@ export async function refreshAuth(): Promise<CachedAuth | null> {
 export function isLoggedIn(): boolean {
   return getCachedAuth() !== null
 }
+
+/**
+ * Sign up a new user with email + password.
+ * 
+ * By default Supabase sends a confirmation email. The returned session
+ * will be null if email confirmation is required.
+ * 
+ * Options:
+ *   - emailConfirm: if false, skips email confirmation (requires SMTP configured)
+ */
+export interface SignUpOptions {
+  emailConfirm?: boolean
+}
+
+export interface SignUpResult {
+  user?: { id: string; email: string }
+  session: CachedAuth | null  // null if email confirmation required
+  requiresEmailConfirmation: boolean
+}
+
+export async function signup(
+  email: string, 
+  password: string, 
+  opts: SignUpOptions = {}
+): Promise<SignUpResult> {
+  const sb = getAnonClient()
+
+  const { data, error } = await sb.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: undefined,  // CLI doesn't need redirect
+    },
+  })
+
+  if (error) {
+    throw new Error(`Signup failed: ${error.message}`)
+  }
+
+  const user = data.user
+  const session = data.session
+
+  // If there's a session, automatically cache it (no email confirmation required)
+  if (session && user) {
+    const cached: CachedAuth = {
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+      expires_at: (session.expires_at ?? 0) * 1000,
+      user_id: user.id,
+      email: user.email ?? email,
+    }
+    saveAuth(cached)
+    return {
+      user: { id: user.id, email: user.email ?? email },
+      session: cached,
+      requiresEmailConfirmation: false,
+    }
+  }
+
+  // No session = email confirmation required
+  return {
+    user: user ? { id: user.id, email: user.email ?? email } : undefined,
+    session: null,
+    requiresEmailConfirmation: true,
+  }
+}

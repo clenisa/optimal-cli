@@ -232,6 +232,26 @@ export async function runDoctor(opts: DoctorOptions): Promise<void> {
     results.push(r); printCheck(r)
   }
 
+  // --- Gemini CLI ---
+  const geminiVersion = run('gemini', ['--version']).split('\n')[0] || ''
+  if (geminiVersion) {
+    const r: CheckResult = { phase: 'runtimes', label: 'Gemini CLI', status: 'pass', detail: geminiVersion }
+    results.push(r); printCheck(r)
+  } else {
+    const r: CheckResult = { phase: 'runtimes', label: 'Gemini CLI', status: 'info', detail: 'not found (optional)' }
+    results.push(r); printCheck(r)
+  }
+
+  // --- Node.js runtime ---
+  const nodeVersion = run('node', ['--version']).split('\n')[0] || ''
+  if (nodeVersion) {
+    const r: CheckResult = { phase: 'runtimes', label: 'Node.js', status: 'pass', detail: nodeVersion }
+    results.push(r); printCheck(r)
+  } else {
+    const r: CheckResult = { phase: 'runtimes', label: 'Node.js', status: 'warn', detail: 'not found' }
+    results.push(r); printCheck(r)
+  }
+
   // --- Claude Code Sessions ---
   if (claudeInfo) {
     const alive = claudeInfo.sessions.filter(s => s.alive)

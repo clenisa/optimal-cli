@@ -1190,6 +1190,50 @@ program
   }, 'login'))
 
 program
+  .command('signup')
+  .description('Create a new account (email + password)')
+  .option('--email <email>', 'Email address (prompts if omitted)')
+  .option('--password <password>', 'Password (prompts if omitted)')
+  .option('--no-email-confirm', 'Skip email confirmation (requires SMTP configured)')
+  .action(wrapCommand(async (opts: { email?: string; password?: string; emailConfirm: boolean }) => {
+    const readline = await import('node:readline/promises')
+
+    let email = opts.email
+    let password = opts.password
+
+    if (!email || !password) {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+      try {
+        if (!email) email = (await rl.question('Email: ')).trim()
+        if (!password) password = (await rl.question('Password: ')).trim()
+      } finally {
+        rl.close()
+      }
+    }
+
+    if (!email || !password) {
+      fmtError('Email and password are required.')
+      process.exit(1)
+    }
+
+    // Basic password validation
+    if (password.length < 6) {
+      fmtError('Password must be at least 6 characters.')
+      process.exit(1)
+    }
+
+    const { signup } = await import('../lib/auth/login.js')
+    const result = await signup(email, password, { emailConfirm: opts.emailConfirm })
+
+    if (result.requiresEmailConfirmation) {
+      success(`Account created! Check ${colorize(email, 'cyan')} for confirmation email.`)
+      fmtInfo('Once confirmed, run "optimal login" to authenticate.')
+    } else {
+      success(`Account created and logged in as ${colorize(result.user!.email, 'cyan')}`)
+    }
+  }, 'signup'))
+
+program
   .command('logout')
   .description('Clear cached authentication')
   .action(wrapCommand(async () => {
