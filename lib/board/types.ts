@@ -103,6 +103,7 @@ export interface CreateTaskInput {
   estimated_effort?: Effort
   blocked_by?: string[]
   labels?: string[]
+  due_date?: string
 }
 
 export interface UpdateTaskInput {
