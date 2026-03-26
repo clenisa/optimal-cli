@@ -1,7 +1,7 @@
 {
   "name": "optimal-cli",
   "version": "2.2.0",
-  "description": "Optimal CLI \u2014 unified command-line interface for bot orchestration, financial analytics, content management, and infrastructure",
+  "description": "Optimal CLI — unified command-line interface for bot orchestration, financial analytics, content management, and infrastructure",
   "type": "module",
   "bin": {
     "optimal": "./dist/bin/optimal.js"
@@ -36,6 +36,7 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.3.2",
     "@supabase/supabase-js": "^2.49.0",
     "commander": "^13.0.0",
     "discord.js": "^14.25.1",

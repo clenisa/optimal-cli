@@ -48,6 +48,7 @@ export interface Task {
   target_module: string | null
   estimated_effort: Effort | null
   blocked_by: string[]
+  due_date: string | null
   sort_order: number
   created_at: string
   updated_at: string

@@ -477,6 +477,14 @@ board
     }
   })
 
+board
+  .command('tui')
+  .description('Interactive kanban board')
+  .action(async () => {
+    const { runBoardTui } = await import('../lib/board/tui.js')
+    await runBoardTui()
+  })
+
 // --- Kanban Sync Commands (Obsidian sync removed — use Discord sync instead) ---
 
 // ═══════════════════════════════════════════════════════════════════════
