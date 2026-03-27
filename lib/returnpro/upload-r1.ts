@@ -29,7 +29,7 @@ export interface R1UploadResult {
   date: string
   /** Total raw rows read from the XLSX (excluding header) */
   totalRowsRead: number
-  /** Number of rows skipped due to missing ProgramName, TRGID, or Master Program Name */
+  /** Number of rows skipped due to missing ProgramName or TRGID */
   rowsSkipped: number
   /** Number of distinct (masterProgram, programCode, location) groups aggregated */
   programGroupsFound: number
@@ -321,13 +321,17 @@ async function parseR1Xlsx(filePath: string): Promise<{
         totalRead++
 
         const programCode = String(row.getCell(programCol).value ?? '').trim()
-        const masterProgram = String(row.getCell(masterCol).value ?? '').trim()
+        const rawMasterProgram = String(row.getCell(masterCol).value ?? '').trim()
         const trgid = String(row.getCell(trgidCol).value ?? '').trim()
 
-        if (!programCode || !masterProgram || !trgid) {
+        if (!programCode || !trgid) {
           skipped++
           continue
         }
+
+        // Map blank/null Master Program Name to "- None -" (master_program_id=1)
+        // instead of skipping — these are valid volume rows with no master program assignment
+        const masterProgram = rawMasterProgram || '- None -'
 
         const locationId = locationCol !== -1
           ? String(row.getCell(locationCol).value ?? '').trim()
@@ -361,7 +365,7 @@ async function parseR1Xlsx(filePath: string): Promise<{
 
   if (rows.length === 0 && totalRead > 0) {
     warnings.push(
-      `All ${totalRead} rows were skipped (missing ProgramName, Master Program Name, or TRGID). ` +
+      `All ${totalRead} rows were skipped (missing ProgramName or TRGID). ` +
       `Check that the first sheet contains data with the expected column headers.`
     )
   }
