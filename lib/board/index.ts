@@ -219,6 +219,9 @@ export async function listTasks(opts?: {
   statuses?: TaskStatus[]
   claimed_by?: string
   assigned_to?: string
+  due_date?: string
+  due_before?: string
+  due_after?: string
 }): Promise<Task[]> {
   let query = sb().from('tasks').select('*')
   if (opts?.project_id) query = query.eq('project_id', opts.project_id)
@@ -226,6 +229,9 @@ export async function listTasks(opts?: {
   else if (opts?.status) query = query.eq('status', opts.status)
   if (opts?.claimed_by) query = query.eq('claimed_by', opts.claimed_by)
   if (opts?.assigned_to) query = query.eq('assigned_to', opts.assigned_to)
+  if (opts?.due_date) query = query.eq('due_date', opts.due_date)
+  if (opts?.due_before) query = query.lt('due_date', opts.due_before)
+  if (opts?.due_after) query = query.gt('due_date', opts.due_after)
   query = query.order('priority', { ascending: true }).order('sort_order', { ascending: true })
   const { data, error } = await query
   if (error) throw new Error(`Failed to list tasks: ${error.message}`)

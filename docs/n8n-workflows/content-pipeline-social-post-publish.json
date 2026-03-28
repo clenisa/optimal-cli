@@ -1,0 +1,156 @@
+{
+    "updatedAt": "2026-03-27T05:43:00.000Z",
+    "createdAt": "2026-03-27T05:43:00.000Z",
+    "id": "social-post-publish",
+    "name": "Content Pipeline — Social Post Publish",
+    "description": "Webhook endpoint for publishing social posts. Supports instagram and facebook. Returns unsupported response for other platforms to prevent webhook timeout.",
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "webhook",
+            "name": "Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [250, 300],
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "social-post-publish",
+                "responseMode": "onReceived",
+                "options": {}
+            },
+            "webhookId": "social-post-publish"
+        },
+        {
+            "id": "switch-platform",
+            "name": "Switch: Platform",
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 3.2,
+            "position": [500, 300],
+            "parameters": {
+                "dataType": "string",
+                "value1": "={{ $json.platform }}",
+                "rules": {
+                    "rules": [
+                        {
+                            "value2": "instagram",
+                            "operation": "equal"
+                        },
+                        {
+                            "value2": "facebook",
+                            "operation": "equal"
+                        }
+                    ]
+                },
+                "fallbackOutput": "fallback"
+            }
+        },
+        {
+            "id": "respond-supported",
+            "name": "Respond: Supported",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [750, 200],
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{ JSON.stringify({ status: \"ok\", platform: $json.platform, message: \"Post received for \" + $json.platform }) }}"
+            }
+        },
+        {
+            "id": "respond-unsupported",
+            "name": "Respond: Unsupported",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [750, 500],
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{ JSON.stringify({ status: \"unsupported\", platform: $json.platform }) }}"
+            }
+        },
+        {
+            "id": "noop-instagram",
+            "name": "NoOp: Instagram",
+            "type": "n8n-nodes-base.noOp",
+            "typeVersion": 1.2,
+            "position": [950, 200],
+            "parameters": {
+                "options": {}
+            }
+        },
+        {
+            "id": "noop-facebook",
+            "name": "NoOp: Facebook",
+            "type": "n8n-nodes-base.noOp",
+            "typeVersion": 1.2,
+            "position": [950, 300],
+            "parameters": {
+                "options": {}
+            }
+        }
+    ],
+    "connections": {
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Switch: Platform",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Switch: Platform": {
+            "main": [
+                [
+                    {
+                        "node": "Respond: Supported",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "NoOp: Instagram",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Respond: Supported",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "NoOp: Facebook",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ],
+            "fallback": [
+                [
+                    {
+                        "node": "Respond: Unsupported",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    },
+    "staticData": null,
+    "meta": {
+        "templateVersion": "1.0"
+    },
+    "pinData": null,
+    "versionId": "initial",
+    "activeVersionId": null,
+    "versionCounter": 1,
+    "triggerCount": 0,
+    "tags": ["social", "publish", "webhook"]
+}

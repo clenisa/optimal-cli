@@ -233,12 +233,15 @@ board
   .description('Display the kanban board')
   .option('-p, --project <slug>', 'Project slug')
   .option('-s, --status <status>', 'Filter by status')
+  .option('--due-date <YYYY-MM-DD>', 'Filter by due date (exact match)')
+  .option('--due-before <YYYY-MM-DD>', 'Filter due before date')
+  .option('--due-after <YYYY-MM-DD>', 'Filter due after date')
   .option('--mine <agent>', 'Show only tasks claimed by agent')
   .option('-w, --watch', 'Watch for changes (refresh every 30s)', false)
   .option('--interval <seconds>', 'Watch refresh interval in seconds', '30')
   .option('-j, --json', 'Output as JSON (for scripting/agentic use)', false)
   .action(async (opts) => {
-    const filters: { project_id?: string; status?: TaskStatus; statuses?: TaskStatus[]; claimed_by?: string } = {}
+    const filters: { project_id?: string; status?: TaskStatus; statuses?: TaskStatus[]; claimed_by?: string; due_date?: string; due_before?: string; due_after?: string } = {}
     if (opts.project) {
       const proj = await getProjectBySlug(opts.project)
       filters.project_id = proj.id
@@ -251,6 +254,9 @@ board
       }
     }
     if (opts.mine) filters.claimed_by = opts.mine
+    if (opts.dueDate) filters.due_date = opts.dueDate
+    if (opts.dueBefore) filters.due_before = opts.dueBefore
+    if (opts.dueAfter) filters.due_after = opts.dueAfter
 
     const tasks = await listTasks(filters)
 
