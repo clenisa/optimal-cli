@@ -1,7 +1,15 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Task } from '../board/types.js'
+
+const PLATFORM_SKILLS: Record<string, string[]> = {
+  discord: ['config-sync', 'discord', 'board'],
+  telegram: ['config-sync', 'board'],
+  content: ['generate-social-posts', 'generate-newsletter', 'publish-social-posts', 'scrape-ads'],
+  finance: ['ingest-transactions', 'stamp-transactions', 'project-budget', 'audit-financials'],
+  all: ['*'],
+}
 
 export interface AgentProfile {
   id: string
@@ -78,4 +86,45 @@ export function findBestAgent(
     if (agent.skills.includes(task.skill_required)) return agent
   }
   return null
+}
+
+/**
+ * Saves agent profiles to agents/profiles.json.
+ */
+export function saveAgentProfiles(profiles: AgentProfile[]): void {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+  const profilesPath = resolve(root, 'agents', 'profiles.json')
+  writeFileSync(profilesPath, JSON.stringify(profiles, null, 2))
+}
+
+/**
+ * Creates a new agent profile with platform-specific default skills.
+ * Returns the new profile or null if agent already exists.
+ */
+export function createAgentProfile(agentId: string, platform: string): AgentProfile | null {
+  const profiles = getAgentProfiles()
+
+  // Check if agent already exists
+  if (profiles.find(p => p.id === agentId)) {
+    return null
+  }
+
+  const skills = PLATFORM_SKILLS[platform] || PLATFORM_SKILLS.all
+  const newProfile: AgentProfile = {
+    id: agentId,
+    skills,
+    maxConcurrent: 2,
+    status: 'idle',
+  }
+
+  profiles.push(newProfile)
+  saveAgentProfiles(profiles)
+  return newProfile
+}
+
+/**
+ * Lists available platform presets.
+ */
+export function listPlatformPresets(): Record<string, string[]> {
+  return { ...PLATFORM_SKILLS }
 }

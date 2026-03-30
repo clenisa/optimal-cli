@@ -1,5 +1,34 @@
 [
-  { "id": "claude-alpha", "skills": ["*"], "maxConcurrent": 3, "status": "idle" },
-  { "id": "claude-beta", "skills": ["generate-social-posts", "generate-newsletter", "publish-social-posts", "publish-blog", "scrape-ads"], "maxConcurrent": 2, "status": "idle" },
-  { "id": "claude-gamma", "skills": ["ingest-transactions", "stamp-transactions", "project-budget", "audit-financials", "manage-scenarios"], "maxConcurrent": 2, "status": "idle" }
+  {
+    "id": "claude-alpha",
+    "skills": [
+      "*"
+    ],
+    "maxConcurrent": 3,
+    "status": "idle"
+  },
+  {
+    "id": "claude-beta",
+    "skills": [
+      "generate-social-posts",
+      "generate-newsletter",
+      "publish-social-posts",
+      "publish-blog",
+      "scrape-ads"
+    ],
+    "maxConcurrent": 2,
+    "status": "idle"
+  },
+  {
+    "id": "claude-gamma",
+    "skills": [
+      "ingest-transactions",
+      "stamp-transactions",
+      "project-budget",
+      "audit-financials",
+      "manage-scenarios"
+    ],
+    "maxConcurrent": 2,
+    "status": "idle"
+  }
 ]

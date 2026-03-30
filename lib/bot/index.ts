@@ -1,7 +1,7 @@
 export { sendHeartbeat, getActiveAgents } from './heartbeat.js'
 export { claimNextTask, releaseTask } from './claim.js'
 export { reportProgress, reportCompletion, reportBlocked } from './reporter.js'
-export { getAgentProfiles, matchTasksToAgent, findBestAgent } from './skills.js'
+export { getAgentProfiles, matchTasksToAgent, findBestAgent, createAgentProfile, listPlatformPresets } from './skills.js'
 export type { AgentProfile } from './skills.js'
 export { runCoordinatorLoop, getCoordinatorStatus, assignTask, rebalance } from './coordinator.js'
 export type { CoordinatorConfig, CoordinatorStatus, RebalanceResult } from './coordinator.js'

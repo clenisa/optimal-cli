@@ -92,6 +92,7 @@ import {
   claimNextTask, releaseTask,
   reportProgress, reportCompletion, reportBlocked,
   runCoordinatorLoop, getCoordinatorStatus, assignTask, rebalance,
+  createAgentProfile, listPlatformPresets,
 } from '../lib/bot/index.js'
 import {
   colorize, table as fmtTable, statusBadge, priorityBadge,
@@ -873,6 +874,8 @@ Commands:
   agent status        Show coordinator status
   agent assign        Manually assign a task
   agent rebalance     Release stale tasks
+  agent create        Create a new agent profile
+  agent platforms     List platform presets
 
 Examples:
   $ optimal agent list                          List active agents
@@ -880,6 +883,8 @@ Examples:
   $ optimal agent claim --agent bot1            Claim next task
   $ optimal agent coordinate --interval 10000   Run coordinator
   $ optimal agent status                        Show coordinator status
+  $ optimal agent create --agent mybot --platform discord
+  $ optimal agent platforms                     Show available presets
 `)
 
 agent.command('heartbeat').description('Send agent heartbeat').requiredOption('--agent <id>', 'Agent ID').option('--status <s>', 'Status: idle, working, error', 'idle').action(async (opts) => { await sendHeartbeat(opts.agent, opts.status as 'idle' | 'working' | 'error'); success(`Heartbeat sent: ${colorize(opts.agent, 'bold')} [${colorize(opts.status, 'cyan')}]`) })
@@ -903,6 +908,10 @@ agent.command('status').description('Show coordinator status').action(async () =
 agent.command('assign').description('Manually assign a task to an agent').requiredOption('--task <id>', 'Task ID').requiredOption('--agent <id>', 'Agent ID').action(async (opts) => { const task = await assignTask(opts.task, opts.agent); success(`Assigned: ${colorize(task.title, 'cyan')} -> ${colorize(opts.agent, 'bold')}`) })
 
 agent.command('rebalance').description('Release stale tasks and rebalance').action(async () => { const result = await rebalance(); if (result.releasedTasks.length === 0) { fmtInfo('No stale tasks found.'); return } console.log(`Released ${result.releasedTasks.length} stale task(s):`); for (const t of result.releasedTasks) { console.log(`  ${colorize(t.id, 'dim')} ${t.title}`) } if (result.reassignedTasks.length > 0) { console.log(`Reassigned ${result.reassignedTasks.length} task(s):`); for (const t of result.reassignedTasks) { console.log(`  ${colorize(t.id, 'dim')} ${t.title} -> ${t.claimed_by}`) } } })
+
+agent.command('create').description('Create a new agent profile with platform-specific defaults').requiredOption('--agent <id>', 'Agent ID').option('--platform <p>', 'Platform preset: discord, telegram, content, finance, all', 'all').option('--skills <s>', 'Comma-separated skills (overrides platform defaults)').option('--max-concurrent <n>', 'Max concurrent tasks', '2').action(async (opts) => { const skills = opts.skills ? opts.skills.split(',') : undefined; const profile = createAgentProfile(opts.agent, opts.platform); if (!profile) { fmtError(`Agent "${opts.agent}" already exists`); process.exit(1) } if (skills) profile.skills = skills; profile.maxConcurrent = parseInt(opts.maxConcurrent); success(`Created agent: ${colorize(profile.id, 'bold')}`); console.log(`  Skills: ${profile.skills.join(', ')}`); console.log(`  Max concurrent: ${profile.maxConcurrent}`) })
+
+agent.command('platforms').description('List available platform presets').action(async () => { const presets = listPlatformPresets(); console.log('Available platform presets:'); for (const [name, skills] of Object.entries(presets)) { console.log(`  ${name.padEnd(10)} ${skills.join(', ')}`) } })
 
 
 // ═══════════════════════════════════════════════════════════════════════
