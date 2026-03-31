@@ -37,7 +37,7 @@ import {
   addComment, listComments,
   logActivity, listActivity,
   formatBoardTable, getNextClaimable,
-  type Task, type TaskStatus,
+  type Task, type TaskStatus, type TaskType,
 } from '../lib/board/index.js'
 import { runAuditComparison } from '../lib/returnpro/audit.js'
 import { exportKpis, formatKpiTable, formatKpiCsv } from '../lib/returnpro/kpis.js'
@@ -120,6 +120,8 @@ import {
   getPipelineStatus, generatePost, approvePost, publishPost, listPosts,
 } from '../lib/content/pipeline.js'
 import { syncToStrapi } from '../lib/content/strapi-sync.js'
+import { generateReport } from '../lib/reports/generate.js'
+import { getResearchStatus, getResearchNotes, listReports } from '../lib/content/research-status.js'
 import { execFileSync } from 'node:child_process'
 
 // Dynamic version from package.json (works in published package)
@@ -237,8 +239,10 @@ board
   .option('-w, --watch', 'Watch for changes (refresh every 30s)', false)
   .option('--interval <seconds>', 'Watch refresh interval in seconds', '30')
   .option('-j, --json', 'Output as JSON (for scripting/agentic use)', false)
+  .option('--type <type>', 'Filter by type: epic, story, task')
+  .option('--hierarchy', 'Show hierarchical tree view', false)
   .action(async (opts) => {
-    const filters: { project_id?: string; status?: TaskStatus; statuses?: TaskStatus[]; claimed_by?: string } = {}
+    const filters: { project_id?: string; status?: TaskStatus; statuses?: TaskStatus[]; claimed_by?: string; task_type?: TaskType } = {}
     if (opts.project) {
       const proj = await getProjectBySlug(opts.project)
       filters.project_id = proj.id
@@ -251,6 +255,7 @@ board
       }
     }
     if (opts.mine) filters.claimed_by = opts.mine
+    if (opts.type) filters.task_type = opts.type as TaskType
 
     const tasks = await listTasks(filters)
 
@@ -264,13 +269,13 @@ board
         if (tasks.length !== lastCount) {
           console.clear()
           console.log(`Updated: ${new Date().toISOString()}`)
-          console.log(formatBoardTable(tasks))
+          console.log(formatBoardTable(tasks, { hierarchical: opts.hierarchy }))
           lastCount = tasks.length
         }
         await new Promise(r => setTimeout(r, interval))
       }
     } else {
-      console.log(formatBoardTable(tasks))
+      console.log(formatBoardTable(tasks, { hierarchical: opts.hierarchy }))
     }
   })
 
@@ -291,6 +296,8 @@ Example:
   .option('--effort <size>', 'Effort: xs, s, m, l, xl')
   .option('--blocked-by <ids>', 'Comma-separated blocking task IDs')
   .option('--labels <labels>', 'Comma-separated labels')
+  .option('--type <type>', 'Task type: epic, story, or task', 'task')
+  .option('--parent <id>', 'Parent task ID (for stories under epics, tasks under stories)')
   .action(async (opts) => {
     const project = await getProjectBySlug(opts.project)
     const task = await createTask({
@@ -298,6 +305,8 @@ Example:
       title: opts.title,
       description: opts.description,
       priority: parseInt(opts.priority) as 1 | 2 | 3 | 4,
+      task_type: opts.type as TaskType,
+      parent_id: opts.parent,
       skill_required: opts.skill,
       source_repo: opts.source,
       target_module: opts.target,
@@ -484,6 +493,30 @@ board
     const { runBoardTui } = await import('../lib/board/tui.js')
     await runBoardTui()
   })
+
+board
+  .command('tree')
+  .description('Show epic/story/task tree for a given epic or story')
+  .requiredOption('--id <uuid>', 'Epic or story ID')
+  .option('--json', 'Output as JSON')
+  .action(wrapCommand(async (opts: { id: string; json?: boolean }) => {
+    const root = await getTask(opts.id)
+    const allTasks = await listTasks({ project_id: root.project_id })
+
+    // Build subtree: root + direct children + grandchildren
+    const subtree: Task[] = [root]
+    const children = allTasks.filter(t => t.parent_id === root.id)
+    subtree.push(...children)
+    for (const child of children) {
+      subtree.push(...allTasks.filter(t => t.parent_id === child.id))
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(subtree, null, 2))
+    } else {
+      console.log(formatBoardTable(subtree, { hierarchical: true }))
+    }
+  }, 'board-tree'))
 
 // --- Kanban Sync Commands (Obsidian sync removed — use Discord sync instead) ---
 
@@ -855,6 +888,80 @@ contentPipeline.command('sync').description('Sync approved posts from Supabase t
   }
   console.log()
 }, 'content-pipeline-sync'))
+
+
+// ── Content Report subcommands ─────────────────────────────────────
+
+const contentReport = content.command('report').description('Intelligence report generation from research notes')
+
+contentReport.command('generate').description('Generate daily intelligence report from research notes')
+  .option('--date <YYYY-MM-DD>', 'Date to generate report for (default: today)')
+  .option('--skip-pdf', 'Generate HTML only, skip PDF rendering')
+  .action(wrapCommand(async (opts: { date?: string; skipPdf?: boolean }) => {
+    const date = opts.date || new Date().toISOString().slice(0, 10)
+    fmtInfo(`Generating intelligence report for ${date}...`)
+
+    const result = await generateReport({ date, skipPdf: opts.skipPdf })
+
+    success('Report generated')
+    console.log(`  HTML: ${colorize(result.htmlPath, 'cyan')}`)
+    if (result.pdfPath) {
+      console.log(`  PDF:  ${colorize(result.pdfPath, 'cyan')}`)
+    }
+    console.log(`  Signal: ${statusBadge(result.reportData.signalLevel)}`)
+    console.log(`  Sources: ${result.reportData.sourceCount} data points`)
+    console.log(`  Themes: ${result.reportData.keyThemes.join(', ')}`)
+    console.log()
+  }, 'content-report-generate'))
+
+
+// ── Content Research subcommands ──────────────────────────────────────
+
+const contentResearch = content.command('research').description('Research pipeline: status, notes, reports')
+
+contentResearch.command('status').description('Show research pipeline status').option('--json', 'Output as JSON').action(wrapCommand(async (opts: { json?: boolean }) => {
+  const status = await getResearchStatus()
+  if (opts.json) { console.log(JSON.stringify(status, null, 2)); return }
+
+  console.log(colorize('\n  Research Pipeline Status', 'bold'))
+  console.log(colorize('  ══════════════════════════════════════', 'dim'))
+  console.log(`  Last scan:     ${status.lastScanTime ? status.lastScanTime.slice(0, 16).replace('T', ' ') : colorize('never', 'yellow')}`)
+  console.log(`  Today's notes: ${status.todayNotes ? colorize('yes', 'green') : colorize('no', 'yellow')}`)
+  console.log(`  Last report:   ${status.lastReportDate ?? colorize('none', 'yellow')}`)
+  console.log(`  Reports:       ${colorize(String(status.reportsAvailable), 'bold')} available`)
+  console.log(`\n  ${colorize('Data Points', 'cyan')}`)
+  console.log(`    Scraped (24h): ${colorize(String(status.dataPointCounts.scraped24h), 'bold')}`)
+  console.log(`    Insights:      ${colorize(String(status.dataPointCounts.insightsTotal), 'bold')}`)
+  console.log(`    Posts draft:   ${colorize(String(status.dataPointCounts.postsDraft), 'yellow')}`)
+  console.log(`    Posts posted:  ${colorize(String(status.dataPointCounts.postsPosted), 'green')}`)
+  if (status.activeCampaigns.length > 0) {
+    console.log(`\n  ${colorize('Campaigns', 'cyan')}`)
+    for (const c of status.activeCampaigns) {
+      console.log(`    ${colorize(c.name, 'bold')} (${c.topic}) — ${statusBadge(c.status)}`)
+    }
+  }
+  console.log()
+}, 'content-research-status'))
+
+contentResearch.command('notes').description('View research notes for a date').option('--date <YYYY-MM-DD>', 'Date (default: today)').action(wrapCommand(async (opts: { date?: string }) => {
+  const date = opts.date || new Date().toISOString().slice(0, 10)
+  const notes = getResearchNotes(date)
+  if (!notes) { fmtInfo(`No research notes found for ${date}`); return }
+  console.log(notes)
+}, 'content-research-notes'))
+
+contentResearch.command('reports').description('List available intelligence reports').option('--date <YYYY-MM-DD>', 'View specific date').option('--json', 'Output as JSON').action(wrapCommand(async (opts: { date?: string; json?: boolean }) => {
+  const reports = listReports()
+  if (opts.json) { console.log(JSON.stringify(reports, null, 2)); return }
+  if (reports.length === 0) { fmtInfo('No reports generated yet'); return }
+  console.log(colorize('\n  Intelligence Reports', 'bold'))
+  console.log(colorize('  ══════════════════════════════════════', 'dim'))
+  for (const r of reports) {
+    const formats = [r.html ? 'HTML' : '', r.pdf ? 'PDF' : ''].filter(Boolean).join(', ')
+    console.log(`    ${r.date}  [${formats}]`)
+  }
+  console.log()
+}, 'content-research-reports'))
 
 
 // ═══════════════════════════════════════════════════════════════════════

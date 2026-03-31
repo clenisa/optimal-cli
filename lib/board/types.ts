@@ -31,6 +31,7 @@ export interface Label {
 export type TaskStatus = 'backlog' | 'ready' | 'claimed' | 'in_progress' | 'review' | 'done' | 'blocked'
 export type Priority = 1 | 2 | 3 | 4
 export type Effort = 'xs' | 's' | 'm' | 'l' | 'xl'
+export type TaskType = 'epic' | 'story' | 'task'
 
 export interface Task {
   id: string
@@ -40,6 +41,8 @@ export interface Task {
   description: string | null
   status: TaskStatus
   priority: Priority
+  task_type: TaskType
+  parent_id: string | null
   assigned_to: string | null
   claimed_by: string | null
   claimed_at: string | null
@@ -97,6 +100,8 @@ export interface CreateTaskInput {
   title: string
   description?: string
   priority?: Priority
+  task_type?: TaskType
+  parent_id?: string
   milestone_id?: string
   skill_required?: string
   source_repo?: string
@@ -111,6 +116,8 @@ export interface UpdateTaskInput {
   title?: string
   status?: TaskStatus
   priority?: Priority
+  task_type?: TaskType
+  parent_id?: string | null
   assigned_to?: string | null
   claimed_by?: string | null
   claimed_at?: string | null
