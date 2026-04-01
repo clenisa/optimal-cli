@@ -98,9 +98,18 @@ export async function buildAgentPrompt(task: Task, options?: BuildPromptOptions)
   }
 
   // --- Instructions ---
+  const branchName = `bot/${task.id.substring(0, 8)}-${slugify(task.title)}`
+
   lines.push('### Instructions')
   lines.push(`Work in the ${task.source_repo ?? 'project'} repository at ${workDir}.`)
   lines.push('Read the CLAUDE.md file first for project conventions.')
+  lines.push('')
+  lines.push('**Branch strategy:**')
+  lines.push(`1. Create a new branch: \`git checkout -b ${branchName}\``)
+  lines.push('2. Make your changes and commit to this branch')
+  lines.push('3. Do NOT push to main — only commit to the feature branch')
+  lines.push(`4. Push: \`git push -u origin ${branchName}\``)
+  lines.push('')
   lines.push('Focus only on this task — do not work on sibling tasks.')
   if (options?.extraInstructions) {
     lines.push(options.extraInstructions)
@@ -112,4 +121,12 @@ export async function buildAgentPrompt(task: Task, options?: BuildPromptOptions)
 
 function formatStatusTag(status: TaskStatus): string {
   return `[${status}]`
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .substring(0, 40)
 }
