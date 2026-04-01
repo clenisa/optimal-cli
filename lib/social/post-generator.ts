@@ -1,10 +1,10 @@
 /**
  * Social Post Generation Pipeline
  *
- * Pipeline: Groq AI generates campaign-themed posts -> Unsplash image search -> Strapi push
+ * Pipeline: Claude AI generates campaign-themed posts -> Unsplash image search -> Strapi push
  *
  * Functions:
- *   callGroq()            — call Groq API (OpenAI-compatible) for AI content
+ *   callAnthropic()      — call Anthropic Claude API for AI content
  *   searchUnsplashImage() — search Unsplash NAPI for a stock photo URL
  *   generateSocialPosts() — orchestrator: generate posts and push to Strapi
  */
@@ -59,18 +59,6 @@ export interface GeneratePostsResult {
 }
 
 // ── Internal types ───────────────────────────────────────────────────
-
-interface GroqMessage {
-  role: 'system' | 'user' | 'assistant'
-  content: string
-}
-
-interface GroqResponse {
-  choices?: Array<{
-    message: { content: string }
-  }>
-  error?: { message: string }
-}
 
 interface UnsplashSearchResult {
   results?: Array<{
@@ -247,41 +235,61 @@ function requireEnv(name: string): string {
   return val
 }
 
-// ── 1. Groq API Call ─────────────────────────────────────────────────
+// ── 1. Anthropic Claude API Call ─────────────────────────────────────
 
-export async function callGroq(
+interface AnthropicMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+interface AnthropicResponse {
+  content?: Array<{ type: string; text?: string }>
+  error?: { type: string; message: string }
+}
+
+export async function callAnthropic(
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
-  const apiKey = requireEnv('GROQ_API_KEY')
-  const model = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
+  const apiKey = requireEnv('ANTHROPIC_API_KEY')
+  const model = process.env.CLAUDE_MODEL ?? 'claude-sonnet-4-20250514'
 
-  const messages: GroqMessage[] = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
+  const messages: AnthropicMessage[] = [
+    { role: 'user', content: `system: ${systemPrompt}\n\nuser: ${userPrompt}` },
   ]
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.9,
+      system: systemPrompt,
       max_tokens: 4096,
+      temperature: 0.9,
     }),
   })
 
-  const data = await response.json() as GroqResponse
+  const data = await response.json() as AnthropicResponse
 
-  if (!data.choices || data.choices.length === 0) {
-    throw new Error(`Groq error: ${JSON.stringify(data.error ?? data)}`)
+  if (data.error) {
+    throw new Error(`Anthropic error: ${data.error.type} - ${data.error.message}`)
   }
 
-  return data.choices[0].message.content
+  if (!data.content || data.content.length === 0) {
+    throw new Error('Anthropic returned empty response')
+  }
+
+  const textContent = data.content.find(c => c.type === 'text')
+  if (!textContent?.text) {
+    throw new Error('Anthropic response missing text content')
+  }
+
+  return textContent.text
 }
 
 // ── 2. Unsplash Image Search ─────────────────────────────────────────
@@ -521,13 +529,13 @@ export async function generateSocialPosts(
     errors: [],
   }
 
-  // Step 1: Generate post ideas via Groq
-  console.log(`\n1. Calling Groq to generate ${count} post ideas...`)
+  // Step 1: Generate post ideas via Claude
+  console.log(`\n1. Calling Claude to generate ${count} post ideas...`)
   let postIdeas: AiPostIdea[]
   try {
     const systemPrompt = buildSystemPrompt(brand)
     const userPrompt = buildUserPrompt(brand, platforms, weekOf, count, campaign)
-    const raw = await callGroq(systemPrompt, userPrompt)
+    const raw = await callAnthropic(systemPrompt, userPrompt)
     postIdeas = parseAiPostIdeas(raw)
     console.log(`   Generated ${postIdeas.length} post ideas`)
   } catch (err) {

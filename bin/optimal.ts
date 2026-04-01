@@ -317,8 +317,9 @@ Example:
 
 board
   .command('update')
-  .description('Update a task')
-  .requiredOption('--id <uuid>', 'Task ID')
+  .description('Update a task (or multiple tasks with --ids)')
+  .option('--id <uuid>', 'Task ID (single)')
+  .option('--ids <uuids>', 'Comma-separated Task IDs (bulk)')
   .option('-s, --status <status>', 'New status')
   .option('-t, --title <title>', 'New title')
   .option('-a, --agent <name>', 'Assign to agent')
@@ -331,6 +332,12 @@ board
   .option('--effort <s|m|l>', 'Estimated effort')
   .option('-m, --message <msg>', 'Log message (adds comment)')
   .action(async (opts) => {
+    const taskIds = opts.ids ? opts.ids.split(',').map((id: string) => id.trim()) : (opts.id ? [opts.id] : [])
+    if (taskIds.length === 0) {
+      console.error('Error: Must provide either --id or --ids')
+      process.exit(1)
+    }
+
     const assignedTo = opts.agent ?? opts.assignedTo
     const updates: Record<string, unknown> = {}
     if (opts.status) updates.status = opts.status
@@ -344,9 +351,19 @@ board
     if (opts.targetModule) updates.target_module = opts.targetModule
     if (opts.effort) updates.estimated_effort = opts.effort
     if (opts.status === 'done') updates.completed_at = new Date().toISOString()
-    const task = await updateTask(opts.id, updates, assignedTo ?? 'cli')
-    if (opts.message) await addComment({ task_id: task.id, author: assignedTo ?? 'cli', body: opts.message })
-    success(`Updated: ${task.title} -> ${statusBadge(task.status)}`)
+
+    const results = []
+    for (const taskId of taskIds) {
+      const task = await updateTask(taskId, updates, assignedTo ?? 'cli')
+      if (opts.message) await addComment({ task_id: task.id, author: assignedTo ?? 'cli', body: opts.message })
+      results.push(task)
+    }
+
+    if (results.length === 1) {
+      success(`Updated: ${results[0].title} -> ${statusBadge(results[0].status)}`)
+    } else {
+      success(`Bulk updated: ${results.length} tasks -> ${statusBadge(results[0].status)}`)
+    }
   })
 
 board
