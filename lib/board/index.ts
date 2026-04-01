@@ -292,6 +292,35 @@ export async function listTasks(opts?: {
   return (data ?? []) as Task[]
 }
 
+export async function getClaimableTasks(opts?: {
+  limit?: number
+  excludeTaskIds?: string[]
+}): Promise<Task[]> {
+  const limit = opts?.limit ?? 5
+
+  let query = sb()
+    .from('tasks')
+    .select('*')
+    .in('status', ['backlog', 'ready'])
+    .eq('task_type', 'task')
+    .is('claimed_by', null)
+    .or('blocked_by.is.null,blocked_by.eq.{}')
+    .order('priority', { ascending: true })
+    .order('created_at', { ascending: true })
+
+  if (opts?.excludeTaskIds && opts.excludeTaskIds.length > 0) {
+    for (const id of opts.excludeTaskIds) {
+      query = query.neq('id', id)
+    }
+  }
+
+  query = query.limit(limit)
+
+  const { data, error } = await query
+  if (error) throw new Error(`Failed to query claimable tasks: ${error.message}`)
+  return (data ?? []) as Task[]
+}
+
 export async function claimTask(taskId: string, agent: string): Promise<Task> {
   const existing = await getTask(taskId)
   if (existing.task_type !== 'task') {

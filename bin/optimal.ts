@@ -518,6 +518,94 @@ board
     }
   }, 'board-tree'))
 
+// ── board auto-claim: cron-friendly claim + launch ──────────────────
+
+board.command('auto-claim')
+  .description('Claim the next available task and launch a Claude Code agent via OptimalOS')
+  .option('--agent <name>', 'Agent claimer name', 'openclaw-cron')
+  .option('--max-sessions <n>', 'Max concurrent sessions (skip if at capacity)', '2')
+  .option('--dry-run', 'Show what would be claimed without acting', false)
+  .option('--optimalos-url <url>', 'OptimalOS base URL', 'http://localhost:3000')
+  .action(wrapCommand(async (opts: { agent: string; maxSessions: string; dryRun: boolean; optimalosUrl: string }) => {
+    const { getClaimableTasks, claimTask } = await import('../lib/board/index.js')
+    const { buildAgentPrompt, getWorkingDirectory } = await import('../lib/board/prompt-builder.js')
+
+    // Check capacity: query active sessions from OptimalOS
+    const maxSessions = parseInt(opts.maxSessions, 10)
+    try {
+      const sessionsRes = await fetch(`${opts.optimalosUrl}/api/hooks/sessions`)
+      if (sessionsRes.ok) {
+        const { sessions = [] } = await sessionsRes.json() as { sessions?: { state: string; taskId?: string }[] }
+        const activeSessions = sessions.filter((s: { state: string }) =>
+          s.state === 'running' || s.state === 'awaiting_review' || s.state === 'idle'
+        )
+        if (activeSessions.length >= maxSessions) {
+          fmtInfo(`At capacity: ${activeSessions.length}/${maxSessions} active sessions. Skipping.`)
+          return
+        }
+        // Exclude tasks that already have sessions
+        const linkedTaskIds = sessions
+          .filter((s: { taskId?: string }) => s.taskId)
+          .map((s: { taskId?: string }) => s.taskId!)
+
+        const claimable = await getClaimableTasks({ limit: 1, excludeTaskIds: linkedTaskIds })
+        if (claimable.length === 0) {
+          fmtInfo('No claimable tasks found.')
+          return
+        }
+
+        const task = claimable[0]
+        console.log(`\n  Next task: ${colorize(task.title, 'cyan')} [P${task.priority}]`)
+        console.log(`  ID: ${colorize(task.id, 'dim')}`)
+        if (task.source_repo) console.log(`  Repo: ${task.source_repo}`)
+
+        if (opts.dryRun) {
+          const prompt = await buildAgentPrompt(task)
+          console.log(`\n  ${colorize('Dry run — would send this prompt:', 'yellow')}\n`)
+          console.log(prompt)
+          return
+        }
+
+        // Claim it
+        await claimTask(task.id, opts.agent)
+        console.log(`  ${colorize('✓', 'green')} Claimed by ${opts.agent}`)
+
+        // Build prompt
+        const prompt = await buildAgentPrompt(task)
+        const workDir = getWorkingDirectory(task.source_repo)
+
+        // Launch via OptimalOS
+        const launchRes = await fetch(`${opts.optimalosUrl}/api/agents/launch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent_type: 'claude-code',
+            prompt,
+            task_id: task.id,
+            session_name: `agent-claude-${task.id.substring(0, 8)}`,
+            working_dir: workDir,
+          }),
+        })
+
+        if (launchRes.ok) {
+          const result = await launchRes.json() as { session_id: string; tmux_session: string }
+          success(`Launched session ${colorize(result.tmux_session, 'cyan')} for task "${task.title}"`)
+        } else {
+          const err = await launchRes.text()
+          fmtError(`Launch failed: ${err}`)
+          // Unclaim on failure
+          const { updateTask } = await import('../lib/board/index.js')
+          await updateTask(task.id, { status: 'backlog', claimed_by: null }, 'system')
+          fmtWarn('Task unclaimed due to launch failure.')
+        }
+      } else {
+        fmtError(`Cannot reach OptimalOS at ${opts.optimalosUrl}. Is the service running?`)
+      }
+    } catch (e: any) {
+      fmtError(`Auto-claim failed: ${e.message}`)
+    }
+  }, 'board:auto-claim'))
+
 // --- Kanban Sync Commands (Obsidian sync removed — use Discord sync instead) ---
 
 // ═══════════════════════════════════════════════════════════════════════
