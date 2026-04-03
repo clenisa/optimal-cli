@@ -1192,7 +1192,7 @@ tx.command('delete').description('Batch delete transactions or staging rows (saf
 // INFRA domain group — Deploy, migrate, health, doctor
 // ═══════════════════════════════════════════════════════════════════════
 
-const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor, instances, repos')
+const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor, instances, repos, cron')
   .addHelpText('after', `
 Commands:
   infra deploy [app] [--prod]         Deploy an app to Vercel
@@ -1201,6 +1201,7 @@ Commands:
   infra doctor [--fix] [--name <n>]   Setup, diagnose, and maintain instance
   infra instances [--json] [--name]   List registered instances and their status
   infra repos [--json]                Show git repo status and Vercel deployments
+  infra cron [--json] [--id <id>]     List OpenClaw cron jobs, schedules, and status
 
 Examples:
   $ optimal infra deploy dashboard --prod
@@ -1209,6 +1210,8 @@ Examples:
   $ optimal infra doctor --fix
   $ optimal infra instances
   $ optimal infra repos
+  $ optimal infra cron
+  $ optimal infra cron --id Auto-backup
   $ optimal infra instances --name oracle
   $ optimal doctor                    (top-level alias)
 `)
@@ -1311,6 +1314,45 @@ infra
         } else {
           console.log('')
           console.log(formatInstanceTable(instances))
+          console.log('')
+        }
+      }
+    } catch (err) {
+      console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+// infra cron — list OpenClaw cron jobs, schedules, and execution status
+infra
+  .command('cron')
+  .description('List OpenClaw cron jobs, their schedules, and last execution status')
+  .option('--json', 'Output as JSON', false)
+  .option('--id <id>', 'Show detail for a specific job (by ID or name)')
+  .option('--runs <n>', 'Number of recent runs to show in detail view', '10')
+  .action(async (opts: { json?: boolean; id?: string; runs?: string }) => {
+    const { getCronJobs, getCronJobDetail, formatCronTable, formatCronDetail } = await import('../lib/infra/cron.js')
+    try {
+      if (opts.id) {
+        const detail = getCronJobDetail(opts.id, parseInt(opts.runs || '10'))
+        if (!detail) {
+          console.error(`Cron job "${opts.id}" not found`)
+          process.exit(1)
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(detail, null, 2))
+        } else {
+          console.log('')
+          console.log(formatCronDetail(detail))
+          console.log('')
+        }
+      } else {
+        const result = getCronJobs()
+        if (opts.json) {
+          console.log(JSON.stringify(result, null, 2))
+        } else {
+          console.log('')
+          console.log(formatCronTable(result))
           console.log('')
         }
       }
