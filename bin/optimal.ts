@@ -65,6 +65,7 @@ import { generateNetSuiteTemplate } from '../lib/returnpro/templates.js'
 import { syncDims } from '../lib/returnpro/sync-dims.js'
 import { runPreflight } from '../lib/returnpro/preflight.js'
 import { triggerPipeline } from '../lib/returnpro/pipeline.js'
+import { seedFacilityCostAssumptions, deriveHistoricalRates, computeProjections, getFacilityCostSummary, formatCostSummaryTable, formatCostSummaryCsv } from '../lib/returnpro/facility-costs.js'
 import { runMonthClose } from '../lib/returnpro/month-close.js'
 import { distributeNewsletter, checkDistributionStatus } from '../lib/newsletter/distribute.js'
 import { generateSocialPosts } from '../lib/social/post-generator.js'
@@ -748,6 +749,7 @@ Commands:
   finance export-budget     Export budget projections as CSV
   finance month-close       Interactive monthly close workflow
   finance pipeline          Trigger ReturnPro pipeline via n8n
+  finance facility-costs    Facility cost reverse engineering (seed/derive/project/summary)
 
 Examples:
   $ optimal finance audit --months 2025-01
@@ -783,6 +785,30 @@ finance.command('export-budget').description('Export FY26 budget projections as 
 finance.command('month-close').description('Interactive monthly close workflow').requiredOption('--month <YYYY-MM>', 'Target month (e.g., 2026-02)').option('--from <step>', 'Start from step number', '1').option('--skip <steps>', 'Comma-separated step numbers to skip').option('--user-id <uuid>', 'User ID for uploads', '00000000-0000-0000-0000-000000000000').action(async (opts: { month: string; from: string; skip?: string; userId: string }) => { try { const from = parseInt(opts.from, 10); const skip = opts.skip ? opts.skip.split(',').map(s => parseInt(s.trim(), 10)) : []; await runMonthClose(opts.month, { from, skip, userId: opts.userId }) } catch (err) { console.error(`Month close failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
 finance.command('pipeline').description('Trigger ReturnPro audit/anomaly/dims pipeline via n8n').option('--month <YYYY-MM>', 'Target month for context').option('--steps <csv>', 'Specific steps: audit,anomaly_scan,dims_check,notify').option('--no-poll', 'Fire and forget without waiting for results').action(async (opts: { month?: string; steps?: string; poll: boolean }) => { try { const steps = opts.steps ? opts.steps.split(',').map(s => s.trim()) : undefined; const result = await triggerPipeline({ month: opts.month, steps, poll: opts.poll }); console.log(`\nReturnPro Pipeline — ${result.pipelineId}`); for (const step of result.steps) { const icon = step.status === 'success' ? '✓' : step.status === 'failed' ? '✗' : step.status === 'running' ? '⟳' : '○'; const dur = step.duration_ms ? `${(step.duration_ms / 1000).toFixed(1)}s` : ''; console.log(`  ${icon} ${step.step.padEnd(16)} ${step.status.padEnd(10)} ${dur}`) } if (result.timedOut) console.log(`\n  ⚠ Timed out after 120s — check n8n for results`); else if (result.allSuccess) console.log(`\n  All steps completed successfully.`); else console.log(`\n  Some steps failed — check n8n execution history.`) } catch (err) { console.error(`Pipeline failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
+
+
+const facilityCosts = finance.command('facility-costs').description('Facility cost reverse engineering — seed, derive, project, and summarize')
+  .addHelpText('after', `
+Subcommands:
+  facility-costs seed       Populate cost assumptions from fee rate card
+  facility-costs derive     Derive historical rates from GL data
+  facility-costs project    Compute facility cost projections from assumptions + volumes
+  facility-costs summary    Display aggregate facility cost summary
+
+Examples:
+  $ optimal finance facility-costs seed --user-id <uuid> --fiscal-year 2026
+  $ optimal finance facility-costs derive --user-id <uuid> --fiscal-year 2026
+  $ optimal finance facility-costs project --user-id <uuid> --fiscal-year 2026
+  $ optimal finance facility-costs summary --user-id <uuid> --fiscal-year 2026 --format table
+`)
+
+facilityCosts.command('seed').description('Populate fpa_facility_cost_assumptions with rate card defaults').requiredOption('--user-id <uuid>', 'Supabase user UUID').option('--fiscal-year <fy>', 'Fiscal year (DB format)', '2026').option('--location <code>', 'Facility location code (e.g., BRTON, FORTX) — null for company-wide').action(async (opts: { userId: string; fiscalYear: string; location?: string }) => { try { const fy = parseInt(opts.fiscalYear); const result = await seedFacilityCostAssumptions(opts.userId, fy, opts.location ?? null); if (result.skipped > 0) { console.log(`Assumptions already exist (${result.skipped} rows). Delete first to re-seed.`) } else { console.log(`Seeded ${result.inserted} rows (${result.feeTypes} fee types × 12 months)`) } } catch (err) { console.error(`Seed failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
+
+facilityCosts.command('derive').description('Derive historical per-unit rates from confirmed GL data and volume').requiredOption('--user-id <uuid>', 'Supabase user UUID').option('--fiscal-year <fy>', 'Fiscal year (DB format)', '2026').action(async (opts: { userId: string; fiscalYear: string }) => { try { const fy = parseInt(opts.fiscalYear); console.log('Fetching GL data and volume...'); const result = await deriveHistoricalRates(opts.userId, fy); console.log(`\nHistorical Rate Derivation:`); console.log(`  Periods analysed: ${result.periodsAnalyzed}`); console.log(`  GL accounts found: ${result.glAccountsFound}`); console.log(`  Rates updated: ${result.ratesUpdated}`); if (result.warnings.length > 0) { console.log(`\nWarnings:`); for (const w of result.warnings) console.log(`  ⚠ ${w}`) } } catch (err) { console.error(`Derive failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
+
+facilityCosts.command('project').description('Compute facility cost projections from assumptions + baseline volumes').requiredOption('--user-id <uuid>', 'Supabase user UUID').option('--fiscal-year <fy>', 'Fiscal year (DB format)', '2026').action(async (opts: { userId: string; fiscalYear: string }) => { try { const fy = parseInt(opts.fiscalYear); console.log('Computing facility cost projections...'); const result = await computeProjections(opts.userId, fy); console.log(`\nFacility Cost Projections:`); console.log(`  Programs: ${result.masterProgramsProcessed}`); console.log(`  Rows upserted: ${result.projectionsUpserted}`); console.log(`  Total cost: $${result.totalFacilityCost.toLocaleString()}`); console.log(`  Avg $/unit: $${result.avgCostPerUnit?.toFixed(4) ?? 'N/A'}`); if (result.warnings.length > 0) { console.log(`\nWarnings:`); for (const w of result.warnings) console.log(`  ⚠ ${w}`) } } catch (err) { console.error(`Project failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
+
+facilityCosts.command('summary').description('Display aggregate facility cost summary').requiredOption('--user-id <uuid>', 'Supabase user UUID').option('--fiscal-year <fy>', 'Fiscal year (DB format)', '2026').option('--format <fmt>', 'Output format: table or csv', 'table').action(async (opts: { userId: string; fiscalYear: string; format: string }) => { try { const fy = parseInt(opts.fiscalYear); const summary = await getFacilityCostSummary(opts.userId, fy); if (opts.format === 'csv') { console.log(formatCostSummaryCsv(summary)) } else { console.log(formatCostSummaryTable(summary)) } } catch (err) { console.error(`Summary failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1192,7 +1218,7 @@ tx.command('delete').description('Batch delete transactions or staging rows (saf
 // INFRA domain group — Deploy, migrate, health, doctor
 // ═══════════════════════════════════════════════════════════════════════
 
-const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor, instances, repos')
+const infra = program.command('infra').description('Infrastructure: deploy, migrate, health, doctor, instances, repos, cron')
   .addHelpText('after', `
 Commands:
   infra deploy [app] [--prod]         Deploy an app to Vercel
@@ -1201,6 +1227,7 @@ Commands:
   infra doctor [--fix] [--name <n>]   Setup, diagnose, and maintain instance
   infra instances [--json] [--name]   List registered instances and their status
   infra repos [--json]                Show git repo status and Vercel deployments
+  infra cron [--json] [--id <id>]     List OpenClaw cron jobs, schedules, and status
 
 Examples:
   $ optimal infra deploy dashboard --prod
@@ -1209,6 +1236,8 @@ Examples:
   $ optimal infra doctor --fix
   $ optimal infra instances
   $ optimal infra repos
+  $ optimal infra cron
+  $ optimal infra cron --id Auto-backup
   $ optimal infra instances --name oracle
   $ optimal doctor                    (top-level alias)
 `)
@@ -1311,6 +1340,45 @@ infra
         } else {
           console.log('')
           console.log(formatInstanceTable(instances))
+          console.log('')
+        }
+      }
+    } catch (err) {
+      console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  })
+
+// infra cron — list OpenClaw cron jobs, schedules, and execution status
+infra
+  .command('cron')
+  .description('List OpenClaw cron jobs, their schedules, and last execution status')
+  .option('--json', 'Output as JSON', false)
+  .option('--id <id>', 'Show detail for a specific job (by ID or name)')
+  .option('--runs <n>', 'Number of recent runs to show in detail view', '10')
+  .action(async (opts: { json?: boolean; id?: string; runs?: string }) => {
+    const { getCronJobs, getCronJobDetail, formatCronTable, formatCronDetail } = await import('../lib/infra/cron.js')
+    try {
+      if (opts.id) {
+        const detail = getCronJobDetail(opts.id, parseInt(opts.runs || '10'))
+        if (!detail) {
+          console.error(`Cron job "${opts.id}" not found`)
+          process.exit(1)
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(detail, null, 2))
+        } else {
+          console.log('')
+          console.log(formatCronDetail(detail))
+          console.log('')
+        }
+      } else {
+        const result = getCronJobs()
+        if (opts.json) {
+          console.log(JSON.stringify(result, null, 2))
+        } else {
+          console.log('')
+          console.log(formatCronTable(result))
           console.log('')
         }
       }
