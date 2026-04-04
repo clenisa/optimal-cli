@@ -849,22 +849,22 @@ content.command('scrape-ads').description('Scrape Meta Ad Library for competitor
 
 // ── Content Pipeline subcommands ────────────────────────────────────
 
-const contentPipeline = content.command('pipeline').description('Content research pipeline: status, scrape, digest, generate, approve, list')
+const contentPipeline = content.command('pipeline').description('Content research pipeline: scout, status, digest, generate, approve, list')
   .addHelpText('after', `
 Subcommands:
-  content pipeline status                      Show pipeline status
-  content pipeline scrape                      Scrape RSS feeds for new items (cron: hourly)
-  content pipeline digest                      Generate daily AI digest (cron: 6am UTC)
-  content pipeline auto-generate               Generate scheduled draft post (cron: 4x daily)
-  content pipeline generate --platform twitter  Generate a post via AI (manual)
-  content pipeline approve --id <uuid>          Approve a draft post
-  content pipeline publish --id <uuid>          Publish approved post to platform
-  content pipeline sync                         Sync approved posts to Strapi
-  content pipeline list [--status draft]        List generated posts
+  content pipeline scout                        Full scout: X + HN + RSS → content_scraped_items
+  content pipeline status                       Show pipeline status
+  content pipeline digest                       Generate daily AI digest (cron: 6am UTC)
+  content pipeline auto-generate                Generate scheduled draft post (cron: 4x daily)
+  content pipeline generate --platform twitter   Generate a post via AI (manual)
+  content pipeline approve --id <uuid>           Approve a draft post
+  content pipeline publish --id <uuid>           Publish approved post to platform
+  content pipeline sync                          Sync approved posts to Strapi
+  content pipeline list [--status draft]         List generated posts
 
 Examples:
-  $ optimal content pipeline status
-  $ optimal content pipeline scrape
+  $ optimal content pipeline scout
+  $ optimal content pipeline scout --skip-rss --topic openclaw
   $ optimal content pipeline digest --topic openclaw
   $ optimal content pipeline auto-generate --platform twitter
   $ optimal content pipeline generate --platform facebook --topic openclaw
@@ -986,24 +986,46 @@ contentPipeline.command('sync').description('Sync approved posts from Supabase t
   console.log()
 }, 'content-pipeline-sync'))
 
-contentPipeline.command('scrape').description('Scrape RSS feeds for new content items (replaces n8n Topic Monitor)').action(wrapCommand(async () => {
-  fmtInfo('Scraping topic feeds via RSSHub...')
-  const result = await scrapeTopics()
+contentPipeline.command('scout').description('Full scout cycle: scrape X timelines, HN, and RSS feeds into content_scraped_items')
+  .option('--skip-x', 'Skip X/Twitter timeline scraping')
+  .option('--skip-hn', 'Skip Hacker News scraping')
+  .option('--skip-rss', 'Skip RSS/GitHub feed scraping')
+  .option('--topic <topic>', 'Topic tag for scraped items', 'openclaw')
+  .action(wrapCommand(async (opts: { skipX?: boolean; skipHn?: boolean; skipRss?: boolean; topic: string }) => {
+  const sources = []
+  if (!opts.skipX) sources.push('X')
+  if (!opts.skipHn) sources.push('HN')
+  if (!opts.skipRss) sources.push('RSS')
+  fmtInfo(`Scout cycle: ${sources.join(' + ')} → content_scraped_items`)
 
-  console.log(colorize('\n  Topic Scrape Results', 'bold'))
+  const result = await scrapeTopics({
+    skipX: opts.skipX,
+    skipHn: opts.skipHn,
+    skipRss: opts.skipRss,
+    topic: opts.topic,
+  })
+
+  console.log(colorize('\n  Scout Results', 'bold'))
   console.log(colorize('  ══════════════════════════════════════', 'dim'))
   console.log(`    Parsed:  ${colorize(String(result.totalParsed), 'bold')}`)
   console.log(`    New:     ${colorize(String(result.inserted), 'green')}`)
   console.log(`    Existed: ${colorize(String(result.alreadyExisted), 'dim')}`)
 
+  if (Object.keys(result.sources).length > 0) {
+    console.log(`\n  ${colorize('By Source', 'cyan')}`)
+    for (const [src, counts] of Object.entries(result.sources)) {
+      console.log(`    ${src.padEnd(12)} parsed: ${colorize(String(counts.parsed), 'bold')}  new: ${colorize(String(counts.inserted), 'green')}`)
+    }
+  }
+
   if (result.errors.length > 0) {
-    console.log(`    Errors:  ${colorize(String(result.errors.length), 'red')}`)
+    console.log(`\n    ${colorize('Errors', 'red')}  ${colorize(String(result.errors.length), 'red')}`)
     for (const e of result.errors) {
       console.log(`      ${colorize('!', 'red')} ${e}`)
     }
   }
   console.log()
-}, 'content-pipeline-scrape'))
+}, 'content-pipeline-scout'))
 
 contentPipeline.command('digest').description('Generate daily AI digest from recent scraped items (replaces n8n Daily Digest)').option('--topic <topic>', 'Topic to digest', 'openclaw').action(wrapCommand(async (opts: { topic: string }) => {
   fmtInfo(`Generating daily digest for topic "${opts.topic}"...`)

@@ -1,30 +1,23 @@
 /**
- * X/Twitter API v2 — Tweet Posting
+ * X/Twitter API v2 — Read & Write
  *
- * Post and delete tweets using X API v2.
+ * Read timelines and post/delete tweets using X API v2 with OAuth 1.0a.
  *
- * IMPORTANT: The X API Free tier Bearer Token (app-only auth) CANNOT post tweets.
- * Posting requires OAuth 1.0a User Context authentication with four credentials:
+ * IMPORTANT: The X API Free tier Bearer Token (app-only auth) returns 401.
+ * All endpoints require OAuth 1.0a User Context authentication:
  *   - X_API_KEY (Consumer Key)
  *   - X_API_SECRET (Consumer Secret)
  *   - X_ACCESS_TOKEN (User Access Token)
  *   - X_ACCESS_TOKEN_SECRET (User Access Token Secret)
  *
- * The Bearer Token (X_BEARER_TOKEN) is only usable for read endpoints, but the
- * Free tier has zero read credits anyway. Until OAuth 1.0a tokens are configured,
- * postTweet() will throw a descriptive error.
- *
- * To obtain OAuth 1.0a tokens:
- *   1. Go to https://developer.x.com/en/portal/projects
- *   2. Create or select an app under the Free tier project
- *   3. Under "Keys and tokens", generate API Key + Secret
- *   4. Generate Access Token + Secret (with Read and Write permissions)
- *   5. Add all four to .env as X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
+ * Free tier allows ~100 reads/month. Use sparingly for scout cycles.
  *
  * Functions:
- *   postTweet()    — POST a tweet via X API v2 (requires OAuth 1.0a)
- *   deleteTweet()  — DELETE a tweet by ID via X API v2 (requires OAuth 1.0a)
- *   getTwitterConfig() — Read and validate Twitter credentials from env
+ *   getUserByUsername() — Look up a user by @handle
+ *   getUserTweets()     — Fetch recent tweets from a user's timeline
+ *   postTweet()         — POST a tweet via X API v2
+ *   deleteTweet()       — DELETE a tweet by ID
+ *   getTwitterConfig()  — Read and validate Twitter credentials from env
  */
 
 import { createHmac, randomBytes } from 'node:crypto'
@@ -41,6 +34,30 @@ export interface TwitterConfig {
 export interface PostTweetResult {
   id: string
   text: string
+}
+
+export interface TwitterUser {
+  id: string
+  name: string
+  username: string
+  public_metrics?: {
+    followers_count: number
+    following_count: number
+    tweet_count: number
+  }
+}
+
+export interface Tweet {
+  id: string
+  text: string
+  created_at?: string
+  public_metrics?: {
+    retweet_count: number
+    reply_count: number
+    like_count: number
+    quote_count: number
+    impression_count: number
+  }
 }
 
 export class TwitterApiError extends Error {
@@ -118,6 +135,7 @@ function buildOAuthHeader(
   method: string,
   url: string,
   config: TwitterConfig,
+  queryParams?: Record<string, string>,
 ): string {
   const oauthParams: Record<string, string> = {
     oauth_consumer_key: config.apiKey,
@@ -128,7 +146,9 @@ function buildOAuthHeader(
     oauth_version: '1.0',
   }
 
-  const signature = generateOAuthSignature(method, url, oauthParams, config)
+  // Include query params in signature base for GET requests
+  const allParams = { ...oauthParams, ...(queryParams ?? {}) }
+  const signature = generateOAuthSignature(method, url, allParams, config)
   oauthParams['oauth_signature'] = signature
 
   const headerParts = Object.keys(oauthParams)
@@ -139,7 +159,63 @@ function buildOAuthHeader(
   return `OAuth ${headerParts}`
 }
 
-// ── API Functions ────────────────────────────────────────────────────
+// ── Read Functions ──────────���────────────────────────────────────────
+
+export async function getUserByUsername(
+  username: string,
+  config?: TwitterConfig,
+): Promise<TwitterUser> {
+  const cfg = config ?? getTwitterConfig()
+  const url = `${API_BASE}/users/by/username/${username}`
+  const queryParams = { 'user.fields': 'id,name,username,public_metrics' }
+  const authHeader = buildOAuthHeader('GET', url, cfg, queryParams)
+  const fullUrl = `${url}?${new URLSearchParams(queryParams).toString()}`
+
+  const res = await fetch(fullUrl, { headers: { Authorization: authHeader } })
+  const data = (await res.json()) as { data?: TwitterUser; errors?: Array<{ message: string }> }
+
+  if (!res.ok || !data.data) {
+    throw new TwitterApiError(
+      data.errors?.[0]?.message ?? `User lookup failed: ${res.status}`,
+      res.status,
+    )
+  }
+
+  return data.data
+}
+
+export async function getUserTweets(
+  userId: string,
+  opts?: { maxResults?: number },
+  config?: TwitterConfig,
+): Promise<Tweet[]> {
+  const cfg = config ?? getTwitterConfig()
+  const url = `${API_BASE}/users/${userId}/tweets`
+  const queryParams = {
+    'max_results': String(opts?.maxResults ?? 10),
+    'tweet.fields': 'created_at,text,public_metrics',
+  }
+  const authHeader = buildOAuthHeader('GET', url, cfg, queryParams)
+  const fullUrl = `${url}?${new URLSearchParams(queryParams).toString()}`
+
+  const res = await fetch(fullUrl, { headers: { Authorization: authHeader } })
+  const data = (await res.json()) as {
+    data?: Tweet[]
+    meta?: { result_count: number }
+    errors?: Array<{ message: string }>
+  }
+
+  if (!res.ok) {
+    throw new TwitterApiError(
+      data.errors?.[0]?.message ?? `Timeline fetch failed: ${res.status}`,
+      res.status,
+    )
+  }
+
+  return data.data ?? []
+}
+
+// ── Write Functions ───────────────────────────────���─────────────────
 
 /**
  * Post a tweet using X API v2 with OAuth 1.0a User Context.
