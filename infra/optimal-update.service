@@ -1,0 +1,12 @@
+[Unit]
+Description=Check and install OpenClaw updates
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=oracle
+ExecStart=/bin/bash -c 'openclaw update --yes 2>&1 || true'
+TimeoutStartSec=300
+Environment=HOME=/home/oracle
+Environment=PATH=/home/oracle/.openclaw/bin:/home/oracle/.npm-global/bin:/usr/local/bin:/usr/bin:/bin

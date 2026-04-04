@@ -1,0 +1,10 @@
+[Unit]
+Description=Oracle auto-backup to GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=oracle
+ExecStart=/home/oracle/.openclaw/scripts/backup.sh
+TimeoutStartSec=300

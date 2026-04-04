@@ -1,0 +1,14 @@
+[Unit]
+Description=Auto-claim ready tasks from board
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=oracle
+WorkingDirectory=/home/oracle/optimal-cli
+ExecStart=/home/oracle/.npm-global/bin/tsx bin/optimal.ts agent claim --agent openclaw-cron
+TimeoutStartSec=300
+EnvironmentFile=/home/oracle/optimal-cli/.env
+Environment=HOME=/home/oracle
+Environment=PATH=/home/oracle/.npm-global/bin:/home/oracle/.bun/bin:/usr/local/bin:/usr/bin:/bin
