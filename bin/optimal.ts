@@ -17,7 +17,6 @@
 //     project     → Project management
 //     milestone   → Milestone management
 //     label       → Label management
-//     scenario    → Budget scenario management
 //     asset       → Digital asset tracking
 //
 //   BACKWARD COMPATIBILITY:
@@ -42,15 +41,6 @@ import {
 import { runAuditComparison } from '../lib/returnpro/audit.js'
 import { exportKpis, formatKpiTable, formatKpiCsv } from '../lib/returnpro/kpis.js'
 import { deploy, healthCheck, listApps } from '../lib/infra/deploy.js'
-import {
-  fetchWesImports,
-  parseSummaryFromJson,
-  initializeProjections,
-  applyUniformAdjustment,
-  calculateTotals,
-  exportToCSV,
-  formatProjectionTable,
-} from '../lib/budget/projections.js'
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { generateNewsletter } from '../lib/newsletter/generate.js'
 import { scrapeCompanies, formatCsv } from '../lib/social/scraper.js'
@@ -73,7 +63,6 @@ import { publishBlog, createBlogPost, listBlogDrafts } from '../lib/cms/publish-
 import { publishIgPhoto, getMetaConfigForBrand } from '../lib/social/meta.js'
 import { strapiGet, strapiPut, type StrapiPage } from '../lib/cms/strapi-client.js'
 import { migrateDb, listPendingMigrations, createMigration } from '../lib/infra/migrate.js'
-import { saveScenario, loadScenario, listScenarios, compareScenarios, deleteScenario } from '../lib/budget/scenarios.js'
 import { deleteBatch, previewBatch } from '../lib/transactions/delete-batch.js'
 import { assertOptimalConfigV1, type OptimalConfigV1 } from '../lib/config/schema.js'
 import {
@@ -186,30 +175,6 @@ Legacy commands (deprecated, use domain groups instead):
 
 function deprecationWarning(oldCmd: string, newCmd: string): void {
   console.warn(`\x1b[33mDEPRECATED: "optimal ${oldCmd}" is now "optimal ${newCmd}". Update your scripts.\x1b[0m`)
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// UTILITY: Budget projection helpers (shared by finance commands)
-// ═══════════════════════════════════════════════════════════════════════
-
-async function loadProjectionData(opts: {
-  file?: string
-  fiscalYear?: string
-  userId?: string
-}) {
-  if (opts.file) {
-    const raw = readFileSync(opts.file, 'utf-8')
-    return parseSummaryFromJson(raw)
-  }
-  const fy = opts.fiscalYear ? parseInt(opts.fiscalYear) : 2025
-  return fetchWesImports({ fiscalYear: fy, userId: opts.userId })
-}
-
-function resolveAdjustmentType(
-  raw?: string,
-): 'percentage' | 'flat' {
-  if (raw === 'flat') return 'flat'
-  return 'percentage'
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -744,8 +709,6 @@ Commands:
   finance preflight         Pre-template validation for a month
   finance diagnose          Diagnostic checks on staging data
   finance anomalies         Detect rate anomalies via z-score
-  finance budget            Run FY budget projections
-  finance export-budget     Export budget projections as CSV
   finance month-close       Interactive monthly close workflow
   finance pipeline          Trigger ReturnPro pipeline via n8n
 
@@ -775,10 +738,6 @@ finance.command('preflight').description('Pre-template validation for a month').
 finance.command('diagnose').description('Run diagnostic checks on staging data for specified months').option('--months <csv>', 'Comma-separated YYYY-MM months (default: all)').action(async (opts: { months?: string }) => { const months = opts.months?.split(',').map(m => m.trim()); try { const result = await diagnoseMonths(months ? { months } : undefined); console.log(`Analysed months: ${result.monthsAnalysed.join(', ')}`); console.log(`Total staging rows: ${result.totalRows} (median: ${result.medianRowCount}/month)\n`); for (const issue of result.issues) { console.log(`  ✗ [${issue.kind}] ${issue.month ?? 'global'}: ${issue.message}`) } if (result.issues.length === 0) { console.log('  ✓ No issues found') } console.log(`\nSummary: ${result.summary.totalIssues} issues found`) } catch (err) { console.error(`Diagnosis failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
 finance.command('anomalies').description('Detect rate anomalies via z-score analysis on ReturnPro data').option('--from <YYYY-MM>', 'Start month').option('--to <YYYY-MM>', 'End month').option('--threshold <n>', 'Z-score threshold', '2.0').action(async (opts: { from?: string; to?: string; threshold: string }) => { try { const months = opts.from && opts.to ? (() => { const result: string[] = []; const [fy, fm] = opts.from!.split('-').map(Number); const [ty, tm] = opts.to!.split('-').map(Number); let y = fy, m = fm; while (y < ty || (y === ty && m <= tm)) { result.push(`${y}-${String(m).padStart(2, '0')}`); m++; if (m > 12) { m = 1; y++ } } return result })() : undefined; const result = await detectRateAnomalies({ months, threshold: parseFloat(opts.threshold) }); console.log(`Found ${result.anomalies.length} anomalies (threshold: ${opts.threshold}σ)`); for (const a of result.anomalies.slice(0, 30)) { console.log(`  ${a.month} | ${a.program_code ?? a.master_program} | z=${a.zscore.toFixed(2)} | rate=${a.rate_per_unit}`) } if (result.anomalies.length > 30) console.log(`  ... and ${result.anomalies.length - 30} more`) } catch (err) { console.error(`Anomaly detection failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
-
-finance.command('budget').description('Run FY26 budget projections with adjustments on FY25 checked-in units').option('--adjustment-type <type>', 'Adjustment type: percent or flat', 'percent').option('--adjustment-value <n>', 'Adjustment value (e.g., 4 for 4%)', '0').option('--format <fmt>', 'Output format: table or csv', 'table').option('--fiscal-year <fy>', 'Base fiscal year for actuals', '2025').option('--user-id <uuid>', 'Supabase user UUID to filter by').option('--file <path>', 'JSON file of CheckedInUnitsSummary[] (skips Supabase)').action(async (opts) => { const format: string = opts.format; if (format !== 'table' && format !== 'csv') { console.error(`Invalid format "${format}". Use "table" or "csv".`); process.exit(1) } console.error('Loading projection data...'); const summary = await loadProjectionData(opts); console.error(`Loaded ${summary.length} programs`); let projections = initializeProjections(summary); const adjType = resolveAdjustmentType(opts.adjustmentType); const adjValue = parseFloat(opts.adjustmentValue); if (adjValue !== 0) { projections = applyUniformAdjustment(projections, adjType, adjValue); console.error(`Applied ${adjType} adjustment: ${adjType === 'percentage' ? `${adjValue}%` : `${adjValue >= 0 ? '+' : ''}${adjValue} units`}`) } const totals = calculateTotals(projections); console.error(`Totals: ${totals.totalActual} actual -> ${totals.totalProjected} projected (${totals.percentageChange >= 0 ? '+' : ''}${totals.percentageChange.toFixed(1)}%)`); if (format === 'csv') { console.log(exportToCSV(projections)) } else { console.log(formatProjectionTable(projections)) } })
-
-finance.command('export-budget').description('Export FY26 budget projections as CSV').option('--adjustment-type <type>', 'Adjustment type: percent or flat', 'percent').option('--adjustment-value <n>', 'Adjustment value (e.g., 4 for 4%)', '0').option('--fiscal-year <fy>', 'Base fiscal year for actuals', '2025').option('--user-id <uuid>', 'Supabase user UUID to filter by').option('--file <path>', 'JSON file of CheckedInUnitsSummary[] (skips Supabase)').action(async (opts) => { console.error('Loading projection data...'); const summary = await loadProjectionData(opts); console.error(`Loaded ${summary.length} programs`); let projections = initializeProjections(summary); const adjType = resolveAdjustmentType(opts.adjustmentType); const adjValue = parseFloat(opts.adjustmentValue); if (adjValue !== 0) { projections = applyUniformAdjustment(projections, adjType, adjValue); console.error(`Applied ${adjType} adjustment: ${adjType === 'percentage' ? `${adjValue}%` : `${adjValue >= 0 ? '+' : ''}${adjValue} units`}`) } console.log(exportToCSV(projections)) })
 
 finance.command('month-close').description('Interactive monthly close workflow').requiredOption('--month <YYYY-MM>', 'Target month (e.g., 2026-02)').option('--from <step>', 'Start from step number', '1').option('--skip <steps>', 'Comma-separated step numbers to skip').option('--user-id <uuid>', 'User ID for uploads', '00000000-0000-0000-0000-000000000000').action(async (opts: { month: string; from: string; skip?: string; userId: string }) => { try { const from = parseInt(opts.from, 10); const skip = opts.skip ? opts.skip.split(',').map(s => parseInt(s.trim(), 10)) : []; await runMonthClose(opts.month, { from, skip, userId: opts.userId }) } catch (err) { console.error(`Month close failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
@@ -1322,21 +1281,6 @@ infra
 
 
 // ═══════════════════════════════════════════════════════════════════════
-// SCENARIO commands (kept as-is)
-// ═══════════════════════════════════════════════════════════════════════
-
-const scenario = program.command('scenario').description('Budget scenario management')
-
-scenario.command('save').description('Save current projections as a named scenario').requiredOption('--name <name>', 'Scenario name').requiredOption('--adjustment-type <type>', 'Adjustment type: percentage or flat').requiredOption('--adjustment-value <n>', 'Adjustment value').option('--description <desc>', 'Description').option('--fiscal-year <fy>', 'Fiscal year', '2025').option('--user-id <uuid>', 'User UUID').action(async (opts) => { try { const path = await saveScenario({ name: opts.name, adjustmentType: opts.adjustmentType as 'percentage' | 'flat', adjustmentValue: parseFloat(opts.adjustmentValue), fiscalYear: parseInt(opts.fiscalYear), userId: opts.userId, description: opts.description }); console.log(`Scenario saved: ${path}`) } catch (err) { console.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
-
-scenario.command('list').description('List all saved budget scenarios').action(async () => { const scenarios = await listScenarios(); if (scenarios.length === 0) { console.log('No scenarios saved'); return } console.log('| Name | Adjustment | Projected | Change | Created |'); console.log('|------|------------|-----------|--------|---------|'); for (const s of scenarios) { const adj = s.adjustmentType === 'percentage' ? `${s.adjustmentValue}%` : `+${s.adjustmentValue}`; console.log(`| ${s.name} | ${adj} | ${s.totalProjected.toLocaleString()} | ${s.percentageChange.toFixed(1)}% | ${s.createdAt.slice(0, 10)} |`) } })
-
-scenario.command('compare').description('Compare two or more scenarios side by side').requiredOption('--names <csv>', 'Comma-separated scenario names').action(async (opts: { names: string }) => { const names = opts.names.split(',').map(n => n.trim()); if (names.length < 2) { console.error('Need at least 2 scenario names to compare'); process.exit(1) } try { const result = await compareScenarios(names); const header = ['Program', 'Actual', ...result.scenarioNames].join(' | '); console.log(`| ${header} |`); console.log(`|${result.scenarioNames.map(() => '---').concat(['---', '---']).join('|')}|`); for (const p of result.programs.slice(0, 50)) { const vals = result.scenarioNames.map(n => String(p.projectedByScenario[n] ?? 0)); console.log(`| ${p.programCode} | ${p.actual} | ${vals.join(' | ')} |`) } console.log('\nTotals:'); for (const name of result.scenarioNames) { const t = result.totalsByScenario[name]; console.log(`  ${name}: ${t.totalProjected.toLocaleString()} (${t.percentageChange >= 0 ? '+' : ''}${t.percentageChange.toFixed(1)}%)`) } } catch (err) { console.error(`Compare failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
-
-scenario.command('delete').description('Delete a saved scenario').requiredOption('--name <name>', 'Scenario name').action(async (opts: { name: string }) => { try { await deleteScenario(opts.name); console.log(`Deleted scenario: ${opts.name}`) } catch (err) { console.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
-
-
-// ═══════════════════════════════════════════════════════════════════════
 // ASSET commands (kept as-is)
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -1549,8 +1493,6 @@ program.command('sync-dims', { hidden: true }).description('[DEPRECATED] Use "op
 program.command('preflight', { hidden: true }).description('[DEPRECATED] Use "optimal finance preflight"').requiredOption('--month <YYYY-MM>').option('--income-statement <path>').action(async (opts: { month: string; incomeStatement?: string }) => { deprecationWarning('preflight', 'finance preflight'); const result = await runPreflight(opts.month, { incomeStatementPath: opts.incomeStatement }); console.log(`Ready: ${result.ready ? 'Yes' : 'No'}`); process.exit(result.ready ? 0 : 1) })
 program.command('rate-anomalies', { hidden: true }).description('[DEPRECATED] Use "optimal finance anomalies"').option('--from <YYYY-MM>').option('--to <YYYY-MM>').option('--threshold <n>', '', '2.0').action(async (opts: { from?: string; to?: string; threshold: string }) => { deprecationWarning('rate-anomalies', 'finance anomalies'); const months = opts.from && opts.to ? (() => { const r: string[] = []; const [fy, fm] = opts.from!.split('-').map(Number); const [ty, tm] = opts.to!.split('-').map(Number); let y = fy, m = fm; while (y < ty || (y === ty && m <= tm)) { r.push(`${y}-${String(m).padStart(2, '0')}`); m++; if (m > 12) { m = 1; y++ } } return r })() : undefined; const result = await detectRateAnomalies({ months, threshold: parseFloat(opts.threshold) }); console.log(`Found ${result.anomalies.length} anomalies`) })
 program.command('diagnose-months', { hidden: true }).description('[DEPRECATED] Use "optimal finance diagnose"').option('--months <csv>').action(async (opts: { months?: string }) => { deprecationWarning('diagnose-months', 'finance diagnose'); const months = opts.months?.split(',').map(m => m.trim()); const result = await diagnoseMonths(months ? { months } : undefined); console.log(`${result.summary.totalIssues} issues found`) })
-program.command('project-budget', { hidden: true }).description('[DEPRECATED] Use "optimal finance budget"').option('--adjustment-type <type>', '', 'percent').option('--adjustment-value <n>', '', '0').option('--format <fmt>', '', 'table').option('--fiscal-year <fy>', '', '2025').option('--user-id <uuid>').option('--file <path>').action(async (opts) => { deprecationWarning('project-budget', 'finance budget'); const summary = await loadProjectionData(opts); let projections = initializeProjections(summary); const adjType = resolveAdjustmentType(opts.adjustmentType); const adjValue = parseFloat(opts.adjustmentValue); if (adjValue !== 0) { projections = applyUniformAdjustment(projections, adjType, adjValue) } if (opts.format === 'csv') { console.log(exportToCSV(projections)) } else { console.log(formatProjectionTable(projections)) } })
-program.command('export-budget', { hidden: true }).description('[DEPRECATED] Use "optimal finance export-budget"').option('--adjustment-type <type>', '', 'percent').option('--adjustment-value <n>', '', '0').option('--fiscal-year <fy>', '', '2025').option('--user-id <uuid>').option('--file <path>').action(async (opts) => { deprecationWarning('export-budget', 'finance export-budget'); const summary = await loadProjectionData(opts); let projections = initializeProjections(summary); const adjType = resolveAdjustmentType(opts.adjustmentType); const adjValue = parseFloat(opts.adjustmentValue); if (adjValue !== 0) { projections = applyUniformAdjustment(projections, adjType, adjValue) } console.log(exportToCSV(projections)) })
 program.command('run-pipeline', { hidden: true }).description('[DEPRECATED] Use "optimal finance pipeline"').option('--month <YYYY-MM>').option('--steps <csv>').option('--no-poll').action(async (opts: { month?: string; steps?: string; poll: boolean }) => { deprecationWarning('run-pipeline', 'finance pipeline'); const steps = opts.steps ? opts.steps.split(',').map(s => s.trim()) : undefined; const result = await triggerPipeline({ month: opts.month, steps, poll: opts.poll }); console.log(`Pipeline ${result.pipelineId}: ${result.allSuccess ? 'success' : 'check n8n'}`) })
 program.command('month-close', { hidden: true }).description('[DEPRECATED] Use "optimal finance month-close"').requiredOption('--month <YYYY-MM>').option('--from <step>', '', '1').option('--skip <steps>').option('--user-id <uuid>', '', '00000000-0000-0000-0000-000000000000').action(async (opts: { month: string; from: string; skip?: string; userId: string }) => { deprecationWarning('month-close', 'finance month-close'); const from = parseInt(opts.from, 10); const skip = opts.skip ? opts.skip.split(',').map(s => parseInt(s.trim(), 10)) : []; await runMonthClose(opts.month, { from, skip, userId: opts.userId }) })
 
