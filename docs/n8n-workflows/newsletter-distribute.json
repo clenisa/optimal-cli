@@ -1,0 +1,250 @@
+{
+  "name": "Newsletter — Distribute",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "newsletter-distribute",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook: newsletter-distribute",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "newsletter-distribute"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate required fields from CLI payload\nconst body = $input.first().json.body || $input.first().json;\nconst documentId = body.documentId;\nconst brand = body.brand || '';\nconst channel = body.channel || 'all';\n\nif (!documentId) {\n  throw new Error('Missing required field: documentId');\n}\n\nreturn {\n  json: {\n    documentId,\n    brand,\n    channel,\n    receivedAt: new Date().toISOString()\n  }\n};"
+      },
+      "id": "validate-payload",
+      "name": "Validate Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.STRAPI_BASE_URL || 'https://strapi.optimal.miami' }}/api/newsletters/{{ $json.documentId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.STRAPI_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-newsletter",
+      "name": "Fetch Newsletter from Strapi",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract newsletter data and prepare for GHL distribution\nconst newsletter = $input.first().json.data || $input.first().json;\nconst validated = $('Validate Payload').first().json;\n\nconst htmlBody = newsletter.html_body || '';\nconst subjectLine = newsletter.subject_line || newsletter.title || 'Newsletter';\nconst brand = validated.brand || newsletter.brand || '';\nconst senderEmail = newsletter.sender_email || '';\n\nreturn {\n  json: {\n    documentId: validated.documentId,\n    brand,\n    channel: validated.channel,\n    subject: subjectLine,\n    html: htmlBody,\n    senderEmail,\n    edition_date: newsletter.edition_date\n  }\n};"
+      },
+      "id": "prepare-distribution",
+      "name": "Prepare Distribution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [950, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/contacts/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GHL_API_TOKEN }}"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"locationId\": \"{{ $env.GHL_LOCATION_ID }}\",\n  \"pageLimit\": 100,\n  \"filters\": [\n    {\n      \"field\": \"tags\",\n      \"operator\": \"contains\",\n      \"value\": \"newsletter\"\n    }\n  ]\n}"
+      },
+      "id": "get-subscribers",
+      "name": "Get Newsletter Subscribers (GHL)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter contacts with valid emails and prepare batch\nconst contacts = $input.first().json.contacts || [];\nconst newsletter = $('Prepare Distribution').first().json;\n\nconst validRecipients = contacts.filter(c =>\n  c.email &&\n  c.validEmail !== false &&\n  !c.dnd\n);\n\nconsole.log(`Found ${validRecipients.length} valid recipients out of ${contacts.length} contacts`);\n\nreturn validRecipients.map(contact => ({\n  json: {\n    contactId: contact.id,\n    email: contact.email,\n    firstName: contact.firstName || 'Valued Client',\n    subject: newsletter.subject,\n    html: newsletter.html,\n    documentId: newsletter.documentId,\n    brand: newsletter.brand\n  }\n}));"
+      },
+      "id": "filter-recipients",
+      "name": "Filter Valid Recipients",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/conversations/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GHL_API_TOKEN }}"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"Email\",\n  \"contactId\": \"{{ $json.contactId }}\",\n  \"subject\": \"{{ $json.subject }}\",\n  \"html\": {{ JSON.stringify($json.html) }},\n  \"emailFrom\": \"{{ $('Prepare Distribution').item.json.senderEmail }}\"\n}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 10,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "send-email",
+      "name": "Send Email via GHL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1700, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate send results and update Strapi\nconst allItems = $input.all();\nconst documentId = allItems[0]?.json?.documentId || $('Validate Payload').first().json.documentId;\nconst brand = allItems[0]?.json?.brand || $('Validate Payload').first().json.brand;\nconst successCount = allItems.filter(i => !i.json?.error).length;\nconst failCount = allItems.filter(i => i.json?.error).length;\n\nreturn {\n  json: {\n    documentId,\n    brand,\n    recipients_count: successCount,\n    failed_count: failCount,\n    total_attempted: allItems.length,\n    delivery_status: failCount === 0 ? 'delivered' : (successCount > 0 ? 'partial' : 'failed'),\n    delivered_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1950, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.STRAPI_BASE_URL || 'https://strapi.optimal.miami' }}/api/newsletters/{{ $json.documentId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.STRAPI_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"data\": {\n    \"delivery_status\": \"{{ $json.delivery_status }}\",\n    \"delivered_at\": \"{{ $json.delivered_at }}\",\n    \"recipients_count\": {{ $json.recipients_count }},\n    \"brand\": \"{{ $json.brand }}\"\n  }\n}"
+      },
+      "id": "update-strapi",
+      "name": "Update Strapi Delivery Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, delivery_status: $('Aggregate Results').first().json.delivery_status, recipients_count: $('Aggregate Results').first().json.recipients_count }) }}"
+      },
+      "id": "respond-success",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2450, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: newsletter-distribute": {
+      "main": [
+        [
+          { "node": "Validate Payload", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate Payload": {
+      "main": [
+        [
+          { "node": "Fetch Newsletter from Strapi", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Newsletter from Strapi": {
+      "main": [
+        [
+          { "node": "Prepare Distribution", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare Distribution": {
+      "main": [
+        [
+          { "node": "Get Newsletter Subscribers (GHL)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Newsletter Subscribers (GHL)": {
+      "main": [
+        [
+          { "node": "Filter Valid Recipients", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter Valid Recipients": {
+      "main": [
+        [
+          { "node": "Send Email via GHL", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Email via GHL": {
+      "main": [
+        [
+          { "node": "Aggregate Results", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          { "node": "Update Strapi Delivery Status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Strapi Delivery Status": {
+      "main": [
+        [
+          { "node": "Respond to Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "newsletter" },
+    { "name": "webhook" }
+  ]
+}
