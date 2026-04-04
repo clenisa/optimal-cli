@@ -120,6 +120,9 @@ import {
   getPipelineStatus, generatePost, approvePost, publishPost, listPosts,
 } from '../lib/content/pipeline.js'
 import { syncToStrapi } from '../lib/content/strapi-sync.js'
+import { scrapeTopics } from '../lib/content/scrape-topics.js'
+import { generateDailyDigest } from '../lib/content/daily-digest.js'
+import { runScheduledPostGen } from '../lib/content/scheduled-post-gen.js'
 import { generateReport } from '../lib/reports/generate.js'
 import { getResearchStatus, getResearchNotes, listReports } from '../lib/content/research-status.js'
 import { execFileSync } from 'node:child_process'
@@ -846,11 +849,14 @@ content.command('scrape-ads').description('Scrape Meta Ad Library for competitor
 
 // ── Content Pipeline subcommands ────────────────────────────────────
 
-const contentPipeline = content.command('pipeline').description('Content research pipeline: status, generate, approve, list')
+const contentPipeline = content.command('pipeline').description('Content research pipeline: status, scrape, digest, generate, approve, list')
   .addHelpText('after', `
 Subcommands:
   content pipeline status                      Show pipeline status
-  content pipeline generate --platform twitter  Generate a post via AI
+  content pipeline scrape                      Scrape RSS feeds for new items (cron: hourly)
+  content pipeline digest                      Generate daily AI digest (cron: 6am UTC)
+  content pipeline auto-generate               Generate scheduled draft post (cron: 4x daily)
+  content pipeline generate --platform twitter  Generate a post via AI (manual)
   content pipeline approve --id <uuid>          Approve a draft post
   content pipeline publish --id <uuid>          Publish approved post to platform
   content pipeline sync                         Sync approved posts to Strapi
@@ -858,6 +864,9 @@ Subcommands:
 
 Examples:
   $ optimal content pipeline status
+  $ optimal content pipeline scrape
+  $ optimal content pipeline digest --topic openclaw
+  $ optimal content pipeline auto-generate --platform twitter
   $ optimal content pipeline generate --platform facebook --topic openclaw
   $ optimal content pipeline approve --id abc123
   $ optimal content pipeline publish --id abc123
@@ -976,6 +985,66 @@ contentPipeline.command('sync').description('Sync approved posts from Supabase t
   }
   console.log()
 }, 'content-pipeline-sync'))
+
+contentPipeline.command('scrape').description('Scrape RSS feeds for new content items (replaces n8n Topic Monitor)').action(wrapCommand(async () => {
+  fmtInfo('Scraping topic feeds via RSSHub...')
+  const result = await scrapeTopics()
+
+  console.log(colorize('\n  Topic Scrape Results', 'bold'))
+  console.log(colorize('  ══════════════════════════════════════', 'dim'))
+  console.log(`    Parsed:  ${colorize(String(result.totalParsed), 'bold')}`)
+  console.log(`    New:     ${colorize(String(result.inserted), 'green')}`)
+  console.log(`    Existed: ${colorize(String(result.alreadyExisted), 'dim')}`)
+
+  if (result.errors.length > 0) {
+    console.log(`    Errors:  ${colorize(String(result.errors.length), 'red')}`)
+    for (const e of result.errors) {
+      console.log(`      ${colorize('!', 'red')} ${e}`)
+    }
+  }
+  console.log()
+}, 'content-pipeline-scrape'))
+
+contentPipeline.command('digest').description('Generate daily AI digest from recent scraped items (replaces n8n Daily Digest)').option('--topic <topic>', 'Topic to digest', 'openclaw').action(wrapCommand(async (opts: { topic: string }) => {
+  fmtInfo(`Generating daily digest for topic "${opts.topic}"...`)
+  const result = await generateDailyDigest({ topic: opts.topic })
+
+  if (result.skipped) {
+    fmtWarn(`Skipped: ${result.summaryPreview}`)
+    return
+  }
+
+  console.log(colorize('\n  Daily Digest Results', 'bold'))
+  console.log(colorize('  ══════════════════════════════════════', 'dim'))
+  console.log(`    Insight ID:   ${colorize(result.insightId ?? 'n/a', 'cyan')}`)
+  console.log(`    Source count:  ${colorize(String(result.sourceCount), 'bold')}`)
+  console.log(`    Preview:       ${result.summaryPreview}`)
+  console.log()
+}, 'content-pipeline-digest'))
+
+contentPipeline.command('auto-generate').description('Generate a scheduled draft post from latest insight (replaces n8n X Post Generator)').option('--platform <platform>', 'Platform: twitter or facebook', 'twitter').option('--topic <topic>', 'Topic', 'openclaw').action(wrapCommand(async (opts: { platform: string; topic: string }) => {
+  fmtInfo(`Running scheduled post generation (${opts.platform})...`)
+  const result = await runScheduledPostGen({ platform: opts.platform as 'twitter' | 'facebook', topic: opts.topic })
+
+  if (result.skipped) {
+    fmtWarn(`Skipped: ${result.reason}`)
+    return
+  }
+
+  if (result.error) {
+    fmtError(`Generation failed: ${result.error}`)
+    process.exit(1)
+  }
+
+  if (result.post) {
+    success(`Draft post generated (${result.post.platform})`)
+    console.log(colorize(`\n  ID: ${result.post.id}`, 'dim'))
+    console.log(colorize('  ────────────────────────────────────', 'dim'))
+    console.log(`  ${result.post.content}`)
+    console.log(colorize('  ────────────────────────────────────', 'dim'))
+    console.log(`  Status: ${statusBadge(result.post.status)} | Model: ${result.post.model_used}\n`)
+  }
+}, 'content-pipeline-auto-generate'))
 
 
 // ── Content Report subcommands ─────────────────────────────────────
