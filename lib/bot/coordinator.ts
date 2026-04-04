@@ -9,6 +9,7 @@ import {
 import { sendHeartbeat, getActiveAgents } from './heartbeat.js'
 import { claimNextTask } from './claim.js'
 import { getAgentProfiles, matchTasksToAgent, type AgentProfile } from './skills.js'
+import { checkCapacity } from './capacity.js'
 
 // --- Types ---
 
@@ -16,6 +17,10 @@ export interface CoordinatorConfig {
   pollIntervalMs: number
   maxAgents: number
   autoAssign: boolean
+  /** System-wide max concurrent agent sessions (default: 2 on Pi) */
+  maxConcurrentSessions: number
+  /** OptimalOS URL for StateHub capacity queries */
+  optimalosUrl: string
 }
 
 export interface CoordinatorStatus {
@@ -25,6 +30,12 @@ export interface CoordinatorStatus {
   tasksReady: number
   tasksBlocked: number
   lastPollAt: string | null
+  capacity: {
+    activeSessions: number
+    effectiveMax: number
+    canClaim: boolean
+    reason?: string
+  }
 }
 
 export interface RebalanceResult {
@@ -38,6 +49,8 @@ const DEFAULT_CONFIG: CoordinatorConfig = {
   pollIntervalMs: 30_000,
   maxAgents: 10,
   autoAssign: true,
+  maxConcurrentSessions: 2,
+  optimalosUrl: 'http://localhost:3000',
 }
 
 let lastPollAt: string | null = null
@@ -57,7 +70,8 @@ export async function runCoordinatorLoop(
   process.on('SIGINT', shutdown)
 
   console.log(
-    `Coordinator started — poll every ${cfg.pollIntervalMs}ms, max ${cfg.maxAgents} agents, autoAssign=${cfg.autoAssign}`,
+    `Coordinator started — poll every ${cfg.pollIntervalMs}ms, max ${cfg.maxAgents} agents, ` +
+    `maxSessions=${cfg.maxConcurrentSessions}, autoAssign=${cfg.autoAssign}`,
   )
 
   while (running) {
@@ -116,6 +130,30 @@ async function pollOnce(cfg: CoordinatorConfig): Promise<void> {
     return
   }
 
+  // Check system-wide capacity via StateHub before claiming
+  const capacity = await checkCapacity({
+    maxConcurrentSessions: cfg.maxConcurrentSessions,
+    optimalosUrl: cfg.optimalosUrl,
+  })
+
+  if (!capacity.canClaim) {
+    await logActivity({
+      actor: 'coordinator',
+      action: 'poll_skip',
+      new_value: {
+        reason: capacity.reason,
+        activeSessions: capacity.activeSessions,
+        effectiveMax: capacity.effectiveMax,
+        readyTasks: readyTasks.length,
+        ts: lastPollAt,
+      },
+    })
+    console.log(
+      `Skipping claim: ${capacity.reason} (${capacity.activeSessions}/${capacity.effectiveMax})`,
+    )
+    return
+  }
+
   // Find idle agents and try to assign tasks
   let assignedCount = 0
   for (const agent of profiles) {
@@ -145,6 +183,8 @@ async function pollOnce(cfg: CoordinatorConfig): Promise<void> {
       readyTasks: readyTasks.length,
       activeAgents: activeAgentIds.size,
       assigned: assignedCount,
+      activeSessions: capacity.activeSessions,
+      effectiveMax: capacity.effectiveMax,
       ts: lastPollAt,
     },
   })
@@ -167,6 +207,8 @@ export async function getCoordinatorStatus(): Promise<CoordinatorStatus> {
   const activeIds = new Set(activeAgents.map((a) => a.agent))
   const idleAgents = profiles.filter((p) => !activeIds.has(p.id))
 
+  const capacity = await checkCapacity()
+
   return {
     activeAgents,
     idleAgents,
@@ -174,6 +216,7 @@ export async function getCoordinatorStatus(): Promise<CoordinatorStatus> {
     tasksReady: readyTasks.length,
     tasksBlocked: blockedTasks.length,
     lastPollAt,
+    capacity,
   }
 }
 
