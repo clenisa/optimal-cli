@@ -1,5 +1,7 @@
 # n8n Social Post Publisher — PATCH Validation Bug
 
+> **RESOLVED (2026-04)**: This n8n workflow is no longer used. Social post distribution now happens via Strapi lifecycle hooks (`afterCreate`). The lifecycle hook posts directly to X/Instagram/Facebook and updates `delivery_status` within Strapi, eliminating the PATCH-back problem entirely. See `lifecycles.ts` in the `strapi-cms` repo.
+
 ## Problem
 The "Distribution: Social Post Publisher" workflow (ID: `yMhijuSQE0UhJFqd`) successfully publishes posts to Instagram/Facebook via Meta Graph API, but fails to write back `delivery_status: "delivered"` to Strapi.
 

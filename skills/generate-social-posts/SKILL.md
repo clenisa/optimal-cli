@@ -17,7 +17,7 @@ End-to-end social media post generation pipeline. Scrapes competitor ads from Me
 1. Call `lib/social/post-generator.ts::generateSocialPosts(brand, week, options?)` to orchestrate the full pipeline
 2. **Scrape competitor ads** — run `lib/social/scraper.ts::scrapeAds(competitors)` against the brand's competitor list (3 parallel batches of 6 companies)
 3. **Analyze ad patterns** — extract common themes, CTAs, platforms, and copy structures from scraped data
-4. **Generate post copy** — send analysis to Groq AI to generate 9 posts with: headline, body, cta_text, cta_url, platform targeting, overlay_style, and scheduling (spread across the week)
+4. **Generate post copy** — send analysis to AI to generate 9 posts with: headline, body, cta_text, cta_url, platform targeting, overlay_style, and scheduling (spread across the week). Tweet generation uses OpenRouter (anthropic/claude-3-haiku); Instagram/Facebook campaign generation uses Groq (llama-3.3-70b-versatile)
 5. **Source photos** — for each post theme, search Unsplash via `unsplash.com/napi/search/photos?query=X&per_page=3` and select the best match
 6. **Build Strapi payloads** — create `social-post` entries with all fields: brand, headline, body, cta_text, cta_url, image_url, overlay_style, template, scheduled_date, competitor_ref, platform, delivery_status=pending
 7. **Push to Strapi** — `strapiPost('/api/social-posts', data)` for each post (skipped in dry-run mode)
@@ -53,7 +53,7 @@ optimal generate-social-posts --brand LIFEINSUR --week 2026-03-03 --count 6 --dr
 
 ## Environment
 Requires: `GROQ_API_KEY`, `STRAPI_URL`, `STRAPI_API_TOKEN`, `playwright` (for ad scraping)
-Optional: `GROQ_MODEL` (default: llama-3.3-70b-versatile)
+Optional: `GROQ_MODEL` (default: llama-3.3-70b-versatile), `OPENROUTER_API_KEY` (required for tweet generation via anthropic/claude-3-haiku)
 
 ## Gotchas
 - **Unsplash API**: Use `unsplash.com/napi/search/photos` (public search is bot-blocked by Anubis challenge page).
@@ -64,4 +64,4 @@ Optional: `GROQ_MODEL` (default: llama-3.3-70b-versatile)
 - **Playwright browser**: Requires one-time `npx playwright install chromium`.
 
 ## Status
-Implementation status: **Implemented.** `lib/social/post-generator.ts` generates campaign-themed posts via Groq AI with brand-specific voice configs (OPTIMAL, CRE-11TRUST, LIFEINSUR), Unsplash image search, and Strapi push. Posts created as drafts by default.
+Implementation status: **Implemented.** `lib/social/post-generator.ts` generates campaign-themed posts via Groq AI (Instagram/Facebook) and OpenRouter anthropic/claude-3-haiku (tweets) with brand-specific voice configs (OPTIMAL, CRE-11TRUST, LIFEINSUR), Unsplash image search, and Strapi push. Posts created as drafts by default. Publishing is done via Strapi admin Publish button (lifecycle hook handles distribution).

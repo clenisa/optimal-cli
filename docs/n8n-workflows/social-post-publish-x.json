@@ -1,0 +1,167 @@
+{
+  "id": "xPostPublish01",
+  "name": "Social Post — Publish to X",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "social-post-publish",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "platform-check",
+              "leftValue": "={{ $json.body.platform }}",
+              "rightValue": "twitter",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "platform-filter",
+      "name": "Is Twitter?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// OAuth 1.0a signature generation for X API v2\nconst crypto = require('crypto');\n\nconst body = $input.first().json.body;\nconst tweetText = body.body; // post body text\nconst documentId = body.documentId;\nconst brand = body.brand;\n\n// X API credentials from environment\nconst apiKey = $env.X_API_KEY;\nconst apiSecret = $env.X_API_SECRET;\nconst accessToken = $env.X_ACCESS_TOKEN;\nconst accessTokenSecret = $env.X_ACCESS_TOKEN_SECRET;\n\nif (!apiKey || !apiSecret || !accessToken || !accessTokenSecret) {\n  throw new Error('Missing X API credentials in n8n environment');\n}\n\nfunction percentEncode(str) {\n  return encodeURIComponent(str).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);\n}\n\nconst method = 'POST';\nconst url = 'https://api.twitter.com/2/tweets';\n\nconst oauthParams = {\n  oauth_consumer_key: apiKey,\n  oauth_nonce: crypto.randomBytes(16).toString('hex'),\n  oauth_signature_method: 'HMAC-SHA1',\n  oauth_timestamp: Math.floor(Date.now() / 1000).toString(),\n  oauth_token: accessToken,\n  oauth_version: '1.0',\n};\n\n// Generate signature\nconst sorted = Object.keys(oauthParams).sort()\n  .map(k => `${percentEncode(k)}=${percentEncode(oauthParams[k])}`)\n  .join('&');\nconst baseString = `${method}&${percentEncode(url)}&${percentEncode(sorted)}`;\nconst signingKey = `${percentEncode(apiSecret)}&${percentEncode(accessTokenSecret)}`;\nconst signature = crypto.createHmac('sha1', signingKey).update(baseString).digest('base64');\noauthParams['oauth_signature'] = signature;\n\nconst headerParts = Object.keys(oauthParams).sort()\n  .map(k => `${percentEncode(k)}=\"${percentEncode(oauthParams[k])}\"`)\n  .join(', ');\nconst authHeader = `OAuth ${headerParts}`;\n\nreturn {\n  json: {\n    documentId,\n    brand,\n    tweetText,\n    authHeader,\n    url,\n  }\n};"
+      },
+      "id": "oauth-sign",
+      "name": "OAuth 1.0a Sign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twitter.com/2/tweets",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.authHeader }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.tweetText }) }}",
+        "options": {
+          "response": { "response": { "fullResponse": true } }
+        }
+      },
+      "id": "post-tweet",
+      "name": "Post Tweet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 240]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.N8N_STRAPI_URL + '/api/social-posts/' + $('OAuth 1.0a Sign').item.json.documentId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.N8N_STRAPI_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ data: { delivery_status: 'delivered', delivered_at: new Date().toISOString(), platform_post_id: $json.body?.data?.id || $json.data?.id || '' } }) }}",
+        "options": {}
+      },
+      "id": "update-strapi-success",
+      "name": "Update Strapi (delivered)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 180]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.N8N_STRAPI_URL + '/api/social-posts/' + $('OAuth 1.0a Sign').item.json.documentId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.N8N_STRAPI_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ data: { delivery_status: 'failed', delivery_errors: [{ timestamp: new Date().toISOString(), error: $json.message || 'Tweet failed' }] } }) }}",
+        "options": {}
+      },
+      "id": "update-strapi-failed",
+      "name": "Update Strapi (failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 360]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "Is Twitter?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Is Twitter?": {
+      "main": [
+        [{ "node": "OAuth 1.0a Sign", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "OAuth 1.0a Sign": {
+      "main": [
+        [{ "node": "Post Tweet", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post Tweet": {
+      "main": [
+        [{ "node": "Update Strapi (delivered)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "",
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "active": false
+}

@@ -21,6 +21,7 @@
  */
 
 import { createHmac, randomBytes } from 'node:crypto'
+import { withSpan } from '../tracing.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -232,41 +233,53 @@ export async function postTweet(
   text: string,
   config?: TwitterConfig,
 ): Promise<PostTweetResult> {
-  const cfg = config ?? getTwitterConfig()
-  const url = `${API_BASE}/tweets`
+  return withSpan('twitter.post_tweet', {
+    'twitter.char_count': text.length,
+    'http.method': 'POST',
+    'http.url': `${API_BASE}/tweets`,
+  }, async (span) => {
+    const cfg = config ?? getTwitterConfig()
+    const url = `${API_BASE}/tweets`
 
-  const authHeader = buildOAuthHeader('POST', url, cfg)
+    const authHeader = buildOAuthHeader('POST', url, cfg)
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: authHeader,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ text }),
+    const start = Date.now()
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    })
+
+    span?.setAttribute('http.status_code', res.status)
+    span?.setAttribute('twitter.api_latency_ms', Date.now() - start)
+
+    const data = (await res.json()) as {
+      data?: { id: string; text: string }
+      title?: string
+      detail?: string
+      type?: string
+      errors?: Array<{ message: string }>
+    }
+
+    if (!res.ok) {
+      span?.setAttribute('twitter.error_type', data.title ?? 'unknown')
+      throw new TwitterApiError(
+        data.detail ?? data.errors?.[0]?.message ?? `X API ${res.status}: ${res.statusText}`,
+        res.status,
+        { title: data.title, detail: data.detail, type: data.type },
+      )
+    }
+
+    if (!data.data) {
+      throw new TwitterApiError('X API returned success but no data', res.status)
+    }
+
+    span?.setAttribute('twitter.tweet_id', data.data.id)
+    return { id: data.data.id, text: data.data.text }
   })
-
-  const data = (await res.json()) as {
-    data?: { id: string; text: string }
-    title?: string
-    detail?: string
-    type?: string
-    errors?: Array<{ message: string }>
-  }
-
-  if (!res.ok) {
-    throw new TwitterApiError(
-      data.detail ?? data.errors?.[0]?.message ?? `X API ${res.status}: ${res.statusText}`,
-      res.status,
-      { title: data.title, detail: data.detail, type: data.type },
-    )
-  }
-
-  if (!data.data) {
-    throw new TwitterApiError('X API returned success but no data', res.status)
-  }
-
-  return { id: data.data.id, text: data.data.text }
 }
 
 /**

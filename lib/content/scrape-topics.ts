@@ -63,7 +63,7 @@ const DEFAULT_FEEDS = [
   { url: `${RSSHUB_BASE}/github/issue/anthropics/claude-code`, account: 'anthropics' },
 ]
 
-const DEFAULT_X_ACCOUNTS = ['OpenClawHQ', 'steipete']
+const DEFAULT_X_ACCOUNTS = ['openclaw', 'steipete']
 
 const DEFAULT_HN_TOP_N = 15
 

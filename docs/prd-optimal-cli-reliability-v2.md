@@ -386,11 +386,11 @@ Current coordinator (`lib/bot/coordinator.ts`) polls every 30s. Improvements:
 ### 6.1 Problem
 
 Three n8n webhooks return 404 after n8n restarts:
-- `/webhook/social-post-publish`
+- `/webhook/social-post-publish` — **RESOLVED (2026-04)**: Social post distribution removed from n8n entirely. Now handled by Strapi lifecycle hooks (`afterCreate`). See `lifecycles.ts` in `strapi-cms` repo.
 - `/webhook/newsletter-distribute`
 - `/webhook/returnpro-pipeline`
 
-Root cause: n8n registers webhook paths at workflow activation time. After restart, inactive workflows don't register their webhook paths. The fix is to toggle workflows OFF then ON, but this is manual and fragile.
+Root cause: n8n registers webhook paths at workflow activation time. After restart, inactive workflows don't register their webhook paths. The fix is to toggle workflows OFF then ON, but this is manual and fragile. Note: the social-post-publish webhook is no longer relevant since distribution moved to Strapi lifecycle hooks.
 
 ### 6.2 Solution: Webhook Health Check + Auto-Recovery
 
@@ -502,7 +502,7 @@ export async function triggerWebhook(
 |------|--------|----------|
 | Add n8n webhook health check to `infra health` | S | P0 |
 | Create shared `triggerWebhook()` with retry logic | M | P0 |
-| Fix social post PATCH — document n8n node fix | S | P0 |
+| ~~Fix social post PATCH — document n8n node fix~~ | S | ~~P0~~ RESOLVED — n8n removed from social post distribution path (2026-04) |
 | Replace direct fetch calls in publish.ts, distribute.ts, pipeline.ts | M | P1 |
 | Add webhook status to `infra doctor` output | S | P1 |
 
@@ -1118,15 +1118,12 @@ Generate content:
     │ calls: Groq AI (llama-3.3-70b)
     │ writes: Strapi social_posts (draft)
     ▼
-Publish content:
-  optimal content social publish --brand CRE-11TRUST
-    │ reads: Strapi social_posts (pending)
-    │ triggers: n8n /webhook/social-post-publish
-    │ writes: Strapi delivery_status='scheduled'
-    ▼
-n8n distributes:
-    │ calls: Meta Graph API (Instagram/Facebook)
-    │ writes: Strapi delivery_status='delivered' (CURRENTLY BROKEN — missing brand)
+Publish content (via Strapi admin — CLI command deprecated):
+  Click Publish in Strapi admin panel
+    │ triggers: afterCreate lifecycle hook in strapi-cms
+    │ calls: Meta Graph API (Instagram/Facebook), X OAuth 1.0a
+    │ writes: Strapi delivery_status='delivered' or 'failed'
+    │ NOTE: n8n is no longer in this path (resolved 2026-04)
     ▼
 Daemon reconciles (NEW):
   optimal content delivery-check
@@ -1206,7 +1203,7 @@ Priority: P0 — Unblock agents
 | 1 | WS2 | Deploy bot sync migration (all tables) | S |
 | 2 | WS2 | Seed agent profiles in registered_bots | S |
 | 3 | WS2 | Implement `sync register` with config snapshot | M |
-| 4 | WS3 | Fix n8n social post PATCH (document + apply) | S |
+| 4 | WS3 | ~~Fix n8n social post PATCH~~ RESOLVED — social posts now use Strapi lifecycle hooks | S |
 | 5 | WS3 | Add n8n webhook health check to `infra health` | S |
 | 6 | WS3 | Create shared `triggerWebhook()` with retry | M |
 

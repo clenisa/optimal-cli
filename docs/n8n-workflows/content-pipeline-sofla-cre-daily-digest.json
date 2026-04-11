@@ -1,0 +1,53 @@
+{
+    "name": "Content Pipeline — SoFla CRE Daily Digest",
+    "description": "Daily 7am digest of South Florida commercial real estate scraped items. Aggregates last 24h of sofla-cre topic items, generates AI summary via Groq, and saves to content_insights.",
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "schedule-daily",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [200, 300],
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 7 * * *"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "digest-code",
+            "name": "Generate SoFla CRE Digest",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [480, 300],
+            "parameters": {
+                "jsCode": "const SUPABASE_URL = '<OPTIMAL_SUPABASE_URL>';\nconst SUPABASE_KEY = '<OPTIMAL_SUPABASE_SERVICE_KEY>';\nconst GROQ_KEY = '<GROQ_API_KEY>';\nconst TOPIC = 'sofla-cre';\n\n// Step 1: Fetch recent scraped items (last 24h)\nconst since = new Date(Date.now() - 86400000).toISOString();\nconst itemsRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_scraped_items?topic=eq.${TOPIC}&scraped_at=gte.${since}&order=scraped_at.desc&limit=50`,\n  { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }\n);\nconst scrapedItems = await itemsRes.json();\n\nif (!scrapedItems.length) {\n  return [{ json: { skipped: true, message: 'No SoFla CRE items in last 24h' } }];\n}\n\n// Step 2: Build AI prompt\nconst itemSummaries = scrapedItems.map((item, i) => {\n  return `${i + 1}. [${item.source}] ${item.title || 'Untitled'}\\n   ${(item.content || '').substring(0, 300)}\\n   URL: ${item.source_url || 'N/A'}`;\n}).join('\\n\\n');\n\nconst prompt = `You are a commercial real estate analyst specializing in the South Florida market (Miami-Dade, Broward, Palm Beach counties). Analyze the following ${scrapedItems.length} news items scraped from CRE publications.\n\nProvide:\n1. A 2-3 paragraph executive summary of key developments in the South Florida CRE market\n2. A JSON array of 3-5 key themes (short strings like \"Industrial demand rising\", \"Office-to-resi conversions\")\n3. A JSON array of 2-3 notable quotes, data points, or deal details\n\nFocus on: deal activity (sales, leases), cap rates, vacancy trends, development pipeline, investor sentiment, and submarket dynamics (Brickell, Wynwood, Doral, Fort Lauderdale, West Palm Beach, etc.)\n\nFormat your response as JSON:\n{\n  \"summary\": \"...\",\n  \"key_themes\": [\"...\"],\n  \"key_quotes\": [\"...\"]\n}\n\n--- ITEMS ---\n${itemSummaries}`;\n\n// Step 3: Call Groq AI\nconst groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {\n  method: 'POST',\n  headers: {\n    Authorization: `Bearer ${GROQ_KEY}`,\n    'Content-Type': 'application/json',\n  },\n  body: JSON.stringify({\n    model: 'llama-3.3-70b-versatile',\n    messages: [\n      { role: 'system', content: 'You are a South Florida commercial real estate market analyst. Always respond with valid JSON only, no markdown fences.' },\n      { role: 'user', content: prompt }\n    ],\n    temperature: 0.3,\n    max_tokens: 2000,\n  })\n});\n\nconst groqData = await groqRes.json();\nconst choice = groqData.choices?.[0]?.message?.content || '';\nconst cleaned = choice.replace(/^```json?\\n?/i, '').replace(/\\n?```$/i, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  parsed = { summary: 'AI parsing failed: ' + e.message, key_themes: [], key_quotes: [] };\n}\n\nconst periodStart = scrapedItems[scrapedItems.length - 1]?.scraped_at || since;\nconst periodEnd = scrapedItems[0]?.scraped_at || new Date().toISOString();\n\n// Step 4: Save insight to Supabase\nconst insight = {\n  topic: TOPIC,\n  period_start: periodStart,\n  period_end: periodEnd,\n  summary: parsed.summary || 'No summary generated',\n  key_themes: parsed.key_themes || [],\n  key_quotes: parsed.key_quotes || [],\n  source_count: scrapedItems.length,\n  model_used: 'groq/llama-3.3-70b-versatile',\n};\n\nconst saveRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_insights`,\n  {\n    method: 'POST',\n    headers: {\n      apikey: SUPABASE_KEY,\n      Authorization: `Bearer ${SUPABASE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=representation',\n    },\n    body: JSON.stringify(insight),\n  }\n);\n\nif (!saveRes.ok) {\n  const errText = await saveRes.text();\n  return [{ json: { error: `Save failed (${saveRes.status}): ${errText}` } }];\n}\n\nconst saved = await saveRes.json();\nreturn [{ json: { insight_id: saved[0]?.id, source_count: scrapedItems.length, topic: TOPIC, summary_preview: parsed.summary?.substring(0, 200) } }];"
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Generate SoFla CRE Digest",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    }
+}

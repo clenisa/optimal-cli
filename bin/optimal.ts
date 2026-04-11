@@ -28,6 +28,11 @@
 
 import { Command } from 'commander'
 import 'dotenv/config'
+import { initTracing, shutdownTracing } from '../lib/tracing.js'
+
+// Initialize Phoenix tracing (defaults to localhost:6006 if PHOENIX_OTLP_URL not set)
+initTracing()
+process.on('beforeExit', () => shutdownTracing())
 import {
   createProject, getProjectBySlug, listProjects, updateProject,
   createMilestone, listMilestones,
@@ -58,7 +63,6 @@ import { triggerPipeline } from '../lib/returnpro/pipeline.js'
 import { runMonthClose } from '../lib/returnpro/month-close.js'
 import { distributeNewsletter, checkDistributionStatus } from '../lib/newsletter/distribute.js'
 import { generateSocialPosts } from '../lib/social/post-generator.js'
-import { publishSocialPosts, getPublishQueue, retryFailed } from '../lib/social/publish.js'
 import { publishBlog, createBlogPost, listBlogDrafts } from '../lib/cms/publish-blog.js'
 import { publishIgPhoto, getMetaConfigForBrand } from '../lib/social/meta.js'
 import { strapiGet, strapiPut, type StrapiPage } from '../lib/cms/strapi-client.js'
@@ -112,6 +116,7 @@ import { syncToStrapi } from '../lib/content/strapi-sync.js'
 import { scrapeTopics } from '../lib/content/scrape-topics.js'
 import { generateDailyDigest } from '../lib/content/daily-digest.js'
 import { runScheduledPostGen } from '../lib/content/scheduled-post-gen.js'
+import { scrapeRssFeeds, listTopics } from '../lib/content/rss-feeds.js'
 import { generateReport } from '../lib/reports/generate.js'
 import { getResearchStatus, getResearchNotes, listReports } from '../lib/content/research-status.js'
 import { execFileSync } from 'node:child_process'
@@ -792,9 +797,9 @@ const contentSocial = content.command('social').description('Social media post g
 
 contentSocial.command('generate').description('Generate AI-powered social media ad posts and push to Strapi').requiredOption('--brand <brand>', 'Brand: OPTIMAL, CRE-11TRUST, or LIFEINSUR').option('--count <n>', 'Number of posts to generate', '9').option('--week-of <date>', 'Week start date YYYY-MM-DD (default: next Monday)').option('--campaign <theme>', 'Campaign theme override (default: auto-rotated)').option('--dry-run', 'Generate without pushing to Strapi', false).action(async (opts: { brand: string; count: string; weekOf?: string; campaign?: string; dryRun: boolean }) => { try { const result = await generateSocialPosts({ brand: opts.brand, count: parseInt(opts.count), weekOf: opts.weekOf, campaign: opts.campaign, dryRun: opts.dryRun }); console.log(`Created ${result.postsCreated} posts for ${result.brand}`); for (const p of result.posts) { console.log(`  ${p.scheduled_date} | ${p.platform} | ${p.headline}`) } if (result.errors.length > 0) { console.log(`\nErrors: ${result.errors.join(', ')}`) } } catch (err) { console.error(`Post generation failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
-contentSocial.command('publish').description('Publish pending social posts to platforms via n8n').requiredOption('--brand <brand>', 'Brand: OPTIMAL, CRE-11TRUST, or LIFEINSUR').option('--limit <n>', 'Max posts to publish').option('--dry-run', 'Preview without publishing', false).option('--retry', 'Retry previously failed posts', false).action(async (opts: { brand: string; limit?: string; dryRun: boolean; retry: boolean }) => { try { let result; if (opts.retry) { result = await retryFailed(opts.brand) } else { result = await publishSocialPosts({ brand: opts.brand, limit: opts.limit ? parseInt(opts.limit) : undefined, dryRun: opts.dryRun }) } console.log(`Published: ${result.published} | Failed: ${result.failed} | Skipped: ${result.skipped}`); for (const d of result.details) { console.log(`  ${d.status} | ${d.headline}${d.error ? ` — ${d.error}` : ''}`) } } catch (err) { console.error(`Publish failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
+contentSocial.command('publish').description('[REMOVED] Social publishing now handled by Strapi lifecycle hooks').requiredOption('--brand <brand>', 'Brand').action(async () => { console.log('This command has been removed. Social post publishing is now handled by Strapi lifecycle hooks.'); console.log('Publish posts directly from the Strapi admin at strapi.optimal.miami.'); process.exit(1) })
 
-contentSocial.command('queue').description('View pending social posts ready for publishing').requiredOption('--brand <brand>', 'Brand: CRE-11TRUST or LIFEINSUR').action(async (opts: { brand: string }) => { try { const queue = await getPublishQueue(opts.brand); if (queue.length === 0) { console.log('No posts in queue'); return } console.log('| Date | Platform | Headline |'); console.log('|------|----------|----------|'); for (const p of queue) { console.log(`| ${p.scheduled_date} | ${p.platform} | ${p.headline} |`) } console.log(`\n${queue.length} posts queued`) } catch (err) { const msg = err instanceof Error ? err.message : String(err); fmtError(`Failed to fetch social queue: ${msg}`); process.exit(1) } })
+contentSocial.command('queue').description('[REMOVED] Social publishing now handled by Strapi lifecycle hooks').requiredOption('--brand <brand>', 'Brand').action(async () => { console.log('This command has been removed. Social post publishing is now handled by Strapi lifecycle hooks.'); console.log('View pending posts in the Strapi admin at strapi.optimal.miami.'); process.exit(1) })
 
 contentSocial.command('instagram').description('Publish pending social posts to Instagram via Meta Graph API').requiredOption('--brand <brand>', 'Brand: CRE-11TRUST or LIFEINSUR').option('--limit <n>', 'Max posts to publish').option('--dry-run', 'Preview without publishing', false).action(async (opts: { brand: string; limit?: string; dryRun: boolean }) => { try { const config = getMetaConfigForBrand(opts.brand); const result = await strapiGet<StrapiPage>('/api/social-posts', { 'filters[brand][$eq]': opts.brand, 'filters[delivery_status][$eq]': 'pending', 'filters[platform][$eq]': 'instagram', 'sort': 'scheduled_date:asc', 'pagination[pageSize]': opts.limit ?? '50' }); const posts = result.data; if (posts.length === 0) { console.log('No pending Instagram posts found'); return } console.log(`Found ${posts.length} pending Instagram post(s) for ${opts.brand}`); let published = 0; let failed = 0; for (const post of posts) { const headline = (post.headline as string) ?? '(no headline)'; const imageUrl = post.image_url as string | undefined; const caption = ((post.body as string) ?? (post.headline as string) ?? '').trim(); if (!imageUrl) { console.log(`  SKIP | ${headline} — no image_url`); failed++; continue } if (opts.dryRun) { console.log(`  DRY  | ${headline}`); continue } try { const igResult = await publishIgPhoto(config, { imageUrl, caption }); await strapiPut('/api/social-posts', post.documentId, { delivery_status: 'delivered', platform_post_id: igResult.mediaId }); console.log(`  OK   | ${headline} → ${igResult.mediaId}`); published++ } catch (err) { const errMsg = err instanceof Error ? err.message : String(err); await strapiPut('/api/social-posts', post.documentId, { delivery_status: 'failed', delivery_errors: [{ timestamp: new Date().toISOString(), error: errMsg }] }).catch(() => {}); console.log(`  FAIL | ${headline} — ${errMsg}`); failed++ } } console.log(`\nPublished: ${published} | Failed: ${failed}${opts.dryRun ? ' | (dry run)' : ''}`) } catch (err) { console.error(`Instagram publish failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
@@ -1026,6 +1031,39 @@ contentPipeline.command('auto-generate').description('Generate a scheduled draft
     console.log(`  Status: ${statusBadge(result.post.status)} | Model: ${result.post.model_used}\n`)
   }
 }, 'content-pipeline-auto-generate'))
+
+contentPipeline.command('scrape-feeds').description('Scrape RSS feeds for a topic (e.g., sofla-cre) into content_scraped_items')
+  .option('--topic <topic>', 'Topic feed set to scrape', 'sofla-cre')
+  .option('--list-topics', 'List available topic feed sets')
+  .action(wrapCommand(async (opts: { topic: string; listTopics?: boolean }) => {
+  if (opts.listTopics) {
+    const topics = listTopics()
+    fmtInfo('Available RSS feed topics:')
+    for (const t of topics) {
+      console.log(`  - ${colorize(t, 'cyan')}`)
+    }
+    return
+  }
+
+  fmtInfo(`Scraping RSS feeds for topic "${opts.topic}"...`)
+  const result = await scrapeRssFeeds(opts.topic)
+
+  console.log(colorize('\n  RSS Feed Scrape Results', 'bold'))
+  console.log(colorize('  ══════════════════════════════════════', 'dim'))
+  console.log(`    Feeds fetched: ${colorize(String(result.feedsFetched), 'bold')}`)
+  console.log(`    Feeds failed:  ${result.feedsFailed > 0 ? colorize(String(result.feedsFailed), 'red') : colorize('0', 'dim')}`)
+  console.log(`    Items parsed:  ${colorize(String(result.totalParsed), 'bold')}`)
+  console.log(`    New inserted:  ${colorize(String(result.newInserted), 'green')}`)
+  console.log(`    Duplicates:    ${colorize(String(result.duplicatesSkipped), 'dim')}`)
+
+  if (result.errors.length > 0) {
+    console.log(`\n    ${colorize('Errors', 'red')}  ${colorize(String(result.errors.length), 'red')}`)
+    for (const e of result.errors) {
+      console.log(`      ${colorize('!', 'red')} ${e}`)
+    }
+  }
+  console.log()
+}, 'content-pipeline-scrape-feeds'))
 
 
 // ── Content Report subcommands ─────────────────────────────────────
@@ -1592,8 +1630,8 @@ program.command('generate-newsletter', { hidden: true }).description('[DEPRECATE
 program.command('distribute-newsletter', { hidden: true }).description('[DEPRECATED] Use "optimal content newsletter distribute"').requiredOption('--document-id <id>').option('--channel <ch>', '', 'all').action(async (opts: { documentId: string; channel: string }) => { deprecationWarning('distribute-newsletter', 'content newsletter distribute'); const result = await distributeNewsletter(opts.documentId, { channel: opts.channel as 'email' | 'all' }); if (result.success) { console.log(`Distribution triggered`) } else { console.error(`Failed: ${result.error}`); process.exit(1) } })
 program.command('distribution-status', { hidden: true }).description('[DEPRECATED] Use "optimal content newsletter status"').requiredOption('--document-id <id>').action(async (opts: { documentId: string }) => { deprecationWarning('distribution-status', 'content newsletter status'); const status = await checkDistributionStatus(opts.documentId); console.log(`Status: ${status.delivery_status}`) })
 program.command('generate-social-posts', { hidden: true }).description('[DEPRECATED] Use "optimal content social generate"').requiredOption('--brand <brand>').option('--count <n>', '', '9').option('--week-of <date>').option('--campaign <theme>').option('--dry-run', '', false).action(async (opts: { brand: string; count: string; weekOf?: string; campaign?: string; dryRun: boolean }) => { deprecationWarning('generate-social-posts', 'content social generate'); const result = await generateSocialPosts({ brand: opts.brand, count: parseInt(opts.count), weekOf: opts.weekOf, campaign: opts.campaign, dryRun: opts.dryRun }); console.log(`Created ${result.postsCreated} posts`) })
-program.command('publish-social-posts', { hidden: true }).description('[DEPRECATED] Use "optimal content social publish"').requiredOption('--brand <brand>').option('--limit <n>').option('--dry-run', '', false).option('--retry', '', false).action(async (opts: { brand: string; limit?: string; dryRun: boolean; retry: boolean }) => { deprecationWarning('publish-social-posts', 'content social publish'); let result; if (opts.retry) { result = await retryFailed(opts.brand) } else { result = await publishSocialPosts({ brand: opts.brand, limit: opts.limit ? parseInt(opts.limit) : undefined, dryRun: opts.dryRun }) } console.log(`Published: ${result.published} | Failed: ${result.failed}`) })
-program.command('social-queue', { hidden: true }).description('[DEPRECATED] Use "optimal content social queue"').requiredOption('--brand <brand>').action(async (opts: { brand: string }) => { deprecationWarning('social-queue', 'content social queue'); const queue = await getPublishQueue(opts.brand); console.log(`${queue.length} posts queued`) })
+program.command('publish-social-posts', { hidden: true }).description('[REMOVED] Social publishing now handled by Strapi lifecycle hooks').requiredOption('--brand <brand>').action(async () => { deprecationWarning('publish-social-posts', 'content social publish'); console.log('This command has been removed. Social post publishing is now handled by Strapi lifecycle hooks.') })
+program.command('social-queue', { hidden: true }).description('[REMOVED] Social publishing now handled by Strapi lifecycle hooks').requiredOption('--brand <brand>').action(async () => { deprecationWarning('social-queue', 'content social queue'); console.log('This command has been removed. Social post publishing is now handled by Strapi lifecycle hooks.') })
 program.command('publish-instagram', { hidden: true }).description('[DEPRECATED] Use "optimal content social instagram"').requiredOption('--brand <brand>').option('--limit <n>').option('--dry-run', '', false).action(async (opts: { brand: string; limit?: string; dryRun: boolean }) => { deprecationWarning('publish-instagram', 'content social instagram'); console.log('Use "optimal content social instagram" instead.') })
 program.command('publish-blog', { hidden: true }).description('[DEPRECATED] Use "optimal content blog publish"').requiredOption('--slug <slug>').option('--deploy', '', false).action(async (opts: { slug: string; deploy: boolean }) => { deprecationWarning('publish-blog', 'content blog publish'); const result = await publishBlog({ slug: opts.slug, deployAfter: opts.deploy }); console.log(`Published: ${result.slug}`) })
 program.command('blog-drafts', { hidden: true }).description('[DEPRECATED] Use "optimal content blog drafts"').option('--site <site>').action(async (opts: { site?: string }) => { deprecationWarning('blog-drafts', 'content blog drafts'); const drafts = await listBlogDrafts(opts.site); console.log(`${drafts.length} drafts`) })

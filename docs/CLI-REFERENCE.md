@@ -27,7 +27,8 @@ RETURNPRO_SUPABASE_SERVICE_KEY=<service_role_key>
 STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=<token>
 GROQ_API_KEY=<key>
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=llama-3.3-70b-versatile  # Used for Instagram/Facebook campaign generation
+OPENROUTER_API_KEY=<key>             # Used for tweet generation (anthropic/claude-3-haiku)
 
 # Required for Instagram publishing
 META_ACCESS_TOKEN=<meta_graph_api_token>
@@ -247,7 +248,7 @@ optimal generate-social-posts --brand CRE-11TRUST --count 5
 # View social queue
 optimal social-queue --brand CRE-11TRUST
 
-# Publish social posts (via n8n)
+# Publish social posts (deprecated — use Strapi admin Publish button)
 optimal publish-social-posts --brand CRE-11TRUST
 
 # Publish to Instagram (direct Meta Graph API)

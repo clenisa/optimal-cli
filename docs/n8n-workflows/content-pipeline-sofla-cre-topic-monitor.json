@@ -1,0 +1,168 @@
+{
+    "name": "Content Pipeline — SoFla CRE Topic Monitor",
+    "description": "Hourly scrape of South Florida commercial real estate RSS feeds. Fetches from Google News, GlobeSt, The Real Deal, Bisnow, SFBJ, and Commercial Observer. Deduplicates against content_scraped_items and inserts new items with topic='sofla-cre'.",
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+        {
+            "id": "schedule-trigger",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [200, 300],
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "hours",
+                            "hoursInterval": 1
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "fetch-google-news-sofla",
+            "name": "Fetch Google News — SoFla CRE",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [440, 100],
+            "parameters": {
+                "url": "https://news.google.com/rss/search?q=%22south+florida%22+%22commercial+real+estate%22&hl=en-US&gl=US&ceid=US:en",
+                "method": "GET",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "fetch-globest",
+            "name": "Fetch GlobeSt",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [440, 250],
+            "parameters": {
+                "url": "https://www.globest.com/feed/",
+                "method": "GET",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "fetch-the-real-deal",
+            "name": "Fetch The Real Deal — SoFla",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [440, 400],
+            "parameters": {
+                "url": "https://therealdeal.com/miami/feed/",
+                "method": "GET",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "fetch-bisnow",
+            "name": "Fetch Bisnow — South Florida",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [440, 550],
+            "parameters": {
+                "url": "https://www.bisnow.com/rss/south-florida",
+                "method": "GET",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "fetch-google-news-miami",
+            "name": "Fetch Google News — Miami CRE",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [440, 700],
+            "parameters": {
+                "url": "https://news.google.com/rss/search?q=%22miami%22+%22commercial+real+estate%22+OR+%22office+lease%22+OR+%22industrial+sale%22&hl=en-US&gl=US&ceid=US:en",
+                "method": "GET",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "id": "parse-and-dedup",
+            "name": "Parse, Dedup & Insert",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [700, 400],
+            "parameters": {
+                "jsCode": "// Parse RSS XML from all CRE feeds, dedup against Supabase, insert new items\nconst SUPABASE_URL = '<OPTIMAL_SUPABASE_URL>';\nconst SUPABASE_KEY = '<OPTIMAL_SUPABASE_SERVICE_KEY>';\nconst TOPIC = 'sofla-cre';\n\nconst feedNames = [\n  'Google News — SoFla CRE',\n  'GlobeSt',\n  'The Real Deal — South Florida',\n  'Bisnow — South Florida',\n  'Google News — Miami CRE',\n];\n\nconst items = [];\n\nfor (const input of $input.all()) {\n  const xml = input.json.data || input.json.body || '';\n  const xmlStr = typeof xml === 'string' ? xml : JSON.stringify(xml);\n\n  const itemRegex = /<item>([\\s\\S]*?)<\\/item>/gi;\n  let match;\n\n  while ((match = itemRegex.exec(xmlStr)) !== null) {\n    const itemXml = match[1];\n    const getTag = (tag) => {\n      const m = itemXml.match(new RegExp(`<${tag}[^>]*>([\\\\s\\\\S]*?)</${tag}>`, 'i'));\n      return m ? m[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, '').trim() : null;\n    };\n\n    const title = getTag('title');\n    const link = getTag('link');\n    const description = getTag('description');\n    const pubDate = getTag('pubDate');\n    const source = link && link.includes('google.com') ? 'google-news'\n      : link && link.includes('globest.com') ? 'globest'\n      : link && link.includes('therealdeal.com') ? 'the-real-deal'\n      : link && link.includes('bisnow.com') ? 'bisnow'\n      : link && link.includes('bizjournals.com') ? 'sfbj'\n      : link && link.includes('commercialobserver.com') ? 'commercial-observer'\n      : 'rss';\n\n    items.push({\n      source,\n      source_url: link,\n      source_account: source,\n      topic: TOPIC,\n      title,\n      content: (description || title || 'No content').substring(0, 2000),\n      raw_json: { title, link, description, pubDate },\n      scraped_at: new Date().toISOString(),\n    });\n  }\n}\n\n// Deduplicate locally by source_url\nconst seen = new Set();\nconst unique = items.filter(item => {\n  if (!item.source_url || seen.has(item.source_url)) return false;\n  seen.add(item.source_url);\n  return true;\n});\n\nif (unique.length === 0) {\n  return [{ json: { inserted: 0, message: 'No items parsed from CRE feeds' } }];\n}\n\n// Check existing URLs in Supabase\nconst existingRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_scraped_items?select=source_url&topic=eq.${TOPIC}`,\n  { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }\n);\nconst existing = await existingRes.json();\nconst existingUrls = new Set((existing || []).map(e => e.source_url));\n\nconst newItems = unique.filter(item => !existingUrls.has(item.source_url));\n\nif (newItems.length === 0) {\n  return [{ json: { inserted: 0, total_parsed: unique.length, message: 'All CRE items already exist' } }];\n}\n\n// Batch insert\nconst insertRes = await fetch(\n  `${SUPABASE_URL}/rest/v1/content_scraped_items`,\n  {\n    method: 'POST',\n    headers: {\n      apikey: SUPABASE_KEY,\n      Authorization: `Bearer ${SUPABASE_KEY}`,\n      'Content-Type': 'application/json',\n      Prefer: 'return=minimal',\n    },\n    body: JSON.stringify(newItems),\n  }\n);\n\nif (!insertRes.ok) {\n  const errText = await insertRes.text();\n  return [{ json: { inserted: 0, error: `Insert failed (${insertRes.status}): ${errText}` } }];\n}\n\nreturn [{ json: { inserted: newItems.length, total_parsed: unique.length, message: `Inserted ${newItems.length} new SoFla CRE items` } }];"
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    { "node": "Fetch Google News — SoFla CRE", "type": "main", "index": 0 },
+                    { "node": "Fetch GlobeSt", "type": "main", "index": 0 },
+                    { "node": "Fetch The Real Deal — SoFla", "type": "main", "index": 0 },
+                    { "node": "Fetch Bisnow — South Florida", "type": "main", "index": 0 },
+                    { "node": "Fetch Google News — Miami CRE", "type": "main", "index": 0 }
+                ]
+            ]
+        },
+        "Fetch Google News — SoFla CRE": {
+            "main": [
+                [{ "node": "Parse, Dedup & Insert", "type": "main", "index": 0 }]
+            ]
+        },
+        "Fetch GlobeSt": {
+            "main": [
+                [{ "node": "Parse, Dedup & Insert", "type": "main", "index": 0 }]
+            ]
+        },
+        "Fetch The Real Deal — SoFla": {
+            "main": [
+                [{ "node": "Parse, Dedup & Insert", "type": "main", "index": 0 }]
+            ]
+        },
+        "Fetch Bisnow — South Florida": {
+            "main": [
+                [{ "node": "Parse, Dedup & Insert", "type": "main", "index": 0 }]
+            ]
+        },
+        "Fetch Google News — Miami CRE": {
+            "main": [
+                [{ "node": "Parse, Dedup & Insert", "type": "main", "index": 0 }]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": false
+    }
+}

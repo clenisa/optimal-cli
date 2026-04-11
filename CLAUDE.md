@@ -92,17 +92,17 @@ Multi-agent coordination system with pull-based task claiming:
 
 Three brands: `CRE-11TRUST` (ElevenTrust CRE), `LIFEINSUR` (Anchor Point Insurance), `OPTIMAL` (Optimal Tech Corp).
 
-**Flow**: Groq AI generates content → Strapi CMS stores as draft → n8n webhooks handle distribution.
+**Flow**: OpenRouter AI generates content → Strapi CMS stores as draft → Strapi lifecycle hook posts directly to platform on publish.
 **Preview**: Strapi preview enabled for social posts at `/api/social-posts/preview/:documentId?status=draft&secret=anchor-preview-2026`
 
 - Strapi v5 uses `documentId` (UUID), not numeric `id`, for all mutations
 - `strapiPost`/`strapiPut` auto-wrap body in `{ data: ... }`
 - Newsletter slug: `${brand}-weekly-${YYYYMMDDTHHmmss}`
-- AI JSON parsing defensively strips markdown fences (Groq sometimes wraps despite instructions)
+- AI JSON parsing defensively strips markdown fences (AI model sometimes wraps despite instructions)
 - Social post platform assignment cycles via `platforms[i % platforms.length]`
-- `meta.ts` calls Meta Graph API v21.0 directly (bypasses n8n) for Instagram publishing
-- Distribution status is terminal from CLI's perspective — n8n writes final `delivery_status` back to Strapi
-- **Groq quality limitation**: Llama 3.3 70B produces generic copy. Task on kanban to upgrade to Claude Sonnet via AI Gateway (~$0.60 per 12-post campaign)
+- Instagram and Facebook posting handled by Strapi lifecycle hook using Meta Graph API v21.0 — credentials from brand_configs table
+- Distribution happens in Strapi's afterCreate lifecycle hook — posts directly to X (OAuth 1.0a), Instagram, or Facebook (Meta Graph API). delivery_status updated automatically to 'delivered' or 'failed'
+- **Content pipeline tweet generation** uses OpenRouter (anthropic/claude-3-haiku). Social post campaigns for Instagram/Facebook still use Groq via post-generator.ts
 - **LIFEINSUR brand config** in `post-generator.ts` needs richer voice/anti-patterns (currently thin vs OPTIMAL's detailed config)
 - **Strapi CSP**: `config/middlewares.ts` whitelists `images.unsplash.com` for social post image previews
 - **Meta API not yet connected** for LIFEINSUR — task on kanban (P1) to connect via Graph API Explorer
@@ -134,13 +134,27 @@ Automated scraping, AI aggregation, and post generation system. Data flows throu
 
 **Workflow JSON specs**: `docs/n8n-workflows/` (secrets redacted, importable via n8n UI)
 
-**Data flow**: RSSHub (localhost:1200) → n8n Topic Monitor → `content_scraped_items` → n8n Daily Digest → Groq AI → `content_insights` → n8n X Post Generator → Groq AI → `content_generated_posts` (draft) → [future: X API posting]
+**Data flow**: RSSHub (localhost:1200) → n8n Topic Monitor → `content_scraped_items` → n8n Daily Digest → Groq AI → `content_insights` → n8n X Post Generator → Groq AI → `content_generated_posts` (draft) → CLI approve → CLI sync to Strapi → Publish in Strapi admin → lifecycle hook posts to X
 
 **Gotchas**:
 - RSSHub Docker requires `sudo` for all operations
 - n8n workflows use hardcoded Supabase keys in HTTP Request nodes (not n8n credentials) — update if keys rotate
 - X API posting is a placeholder — posts save as `draft` status in Supabase until X API keys are configured
 - All content tables have RLS enabled with permissive policies for service_role access
+
+### Social Post Distribution (Strapi Lifecycle Hook)
+
+Publishing a social post in Strapi admin triggers direct platform posting via `src/api/social-post/content-types/social-post/lifecycles.ts`:
+
+| Platform | API | Credentials Source |
+|----------|-----|-------------------|
+| Twitter/X | X API v2 + OAuth 1.0a | Strapi `.env` (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET) |
+| Instagram | Meta Graph API v21.0 (container→publish) | `brand_configs` table in Strapi (meta_access_token, meta_ig_account_id) |
+| Facebook | Meta Graph API v21.0 (page post) | `brand_configs` table in Strapi (meta_access_token, meta_page_id) |
+
+- n8n is **not** involved in social post distribution — only in content scraping (Topic Monitor) and digest generation (Daily Digest)
+- `lib/social/publish.ts` has been deleted — social post publishing is handled entirely by Strapi lifecycle hooks
+- The old n8n webhook `/webhook/social-post-publish` is also deprecated
 
 ### Kanban Sync (`lib/kanban/sync.ts`)
 
@@ -263,7 +277,8 @@ STRAPI_URL=https://strapi.optimal.miami
 STRAPI_API_TOKEN=...
 
 # AI (content generation)
-GROQ_API_KEY=...
+OPENROUTER_API_KEY=...          # Used for content pipeline tweet generation (anthropic/claude-3-haiku)
+GROQ_API_KEY=...                # Used for social post campaigns (post-generator.ts) and daily digest — NOT for content pipeline tweets
 GROQ_MODEL=llama-3.3-70b-versatile
 
 # News

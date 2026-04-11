@@ -18,7 +18,7 @@ posting and the ReturnPro financial pipeline remain in n8n.
 
 | Workflow | Reason |
 |----------|--------|
-| Strapi posting / social-post sync | Strapi webhooks and n8n's HTTP node integrations |
+| ~~Strapi posting / social-post sync~~ | **Migrated off n8n** — social post distribution now handled by Strapi lifecycle hooks (`afterCreate`). Posts are published directly from Strapi admin; the lifecycle hook calls Meta Graph API and X OAuth 1.0a directly. See `lifecycles.ts` in the `strapi-cms` repo. |
 | ReturnPro financial pipeline | Complex multi-step orchestration with polling |
 | Newsletter distribution | n8n webhook triggers from CLI |
 | Facebook Weekly Post | Not yet active; will be evaluated separately |

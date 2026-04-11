@@ -11,6 +11,7 @@
 
 import { getSupabase } from '../supabase.js'
 import { postTweet, getTwitterConfig, type TwitterConfig } from '../social/twitter.js'
+import { withSpan } from '../tracing.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -44,13 +45,20 @@ export interface GeneratePostOpts {
 const CAMPAIGN_ID = '46189a3a-f75b-4811-9e93-efaf252956d6'
 
 const PLATFORM_PROMPTS: Record<string, string> = {
-  twitter: `You are a social media writer for Optimal Tech Corp (@OpenClawHQ), an AI-first software company.
-Write a single X (Twitter) post based on the provided insight.
-Requirements:
-- Maximum 280 characters
-- Engaging, informative, and professional
-- Include 1-2 relevant hashtags
-- Return ONLY the post text, no JSON wrapping.`,
+  twitter: `You ghostwrite tweets for Carlos Lenis (@carlos_lenis), a Miami software engineer who ships AI tools daily.
+
+Source material: recent tweets from @openclaw and its founder @steipete. Pick ONE specific thing — a feature, a decision, a shift — and write a tweet that explains why it matters.
+
+Good tweet pattern: "[Specific thing] does [concrete benefit]. [Why that's interesting]."
+Example quality: "OpenClaw's /dreaming feature consolidates short-term signals into durable memory. It's like REM sleep for your AI agents — finally, coherent long-term interactions."
+
+Hard rules:
+- MUST be under 240 characters (leave room, never hit 280)
+- One idea per tweet. No lists, no "also"
+- Concrete > abstract. Name the feature, the model, the decision
+- No hashtags. No emojis. No "exciting" or "game-changer"
+- No preamble. Start with the insight, not "Just saw that..." or "Interesting:"
+- Return ONLY the tweet text.`,
 
   facebook: `You write engaging Facebook posts for Optimal Tech Corp — a Miami-based AI consulting company.
 Your tone is confident, technically grounded, and internet-native.
@@ -122,79 +130,108 @@ export async function getPipelineStatus(): Promise<PipelineStatus> {
 // ── generatePost ─────────────────────────────────────────────────────
 
 export async function generatePost(opts: GeneratePostOpts): Promise<GeneratedPost> {
-  const sb = getSupabase('optimal')
-  const groqKey = process.env.GROQ_API_KEY
-  if (!groqKey) throw new Error('Missing GROQ_API_KEY environment variable')
+  return withSpan('content.generate_post', {
+    'content.platform': opts.platform,
+    'content.topic': opts.topic,
+    'content.campaign_id': CAMPAIGN_ID,
+    'ai.model': 'anthropic/claude-3-haiku',
+  }, async (span) => {
+    const sb = getSupabase('optimal')
+    const apiKey = process.env.OPENROUTER_API_KEY
+    if (!apiKey) throw new Error('Missing OPENROUTER_API_KEY environment variable')
 
-  // Fetch latest insight for the topic
-  const { data: insights, error: insightErr } = await sb
-    .from('content_insights')
-    .select('*')
-    .eq('topic', opts.topic)
-    .order('created_at', { ascending: false })
-    .limit(1)
+    // Fetch recent X tweets from @openclaw and @steipete as source material
+    const { data: xTweets, error: tweetsErr } = await sb
+      .from('content_scraped_items')
+      .select('source_account, content, scraped_at')
+      .eq('source', 'x')
+      .eq('topic', opts.topic)
+      .order('scraped_at', { ascending: false })
+      .limit(20)
 
-  if (insightErr) throw new Error(`Failed to fetch insights: ${insightErr.message}`)
-  if (!insights?.length) throw new Error(`No insights found for topic '${opts.topic}'`)
+    if (tweetsErr) throw new Error(`Failed to fetch tweets: ${tweetsErr.message}`)
+    if (!xTweets?.length) throw new Error(`No X tweets found for topic '${opts.topic}'. Run "optimal content pipeline scout" first.`)
 
-  const insight = insights[0]
-  const themes = Array.isArray(insight.key_themes) ? insight.key_themes.join(', ') : ''
-  const systemPrompt = PLATFORM_PROMPTS[opts.platform]
-  if (!systemPrompt) throw new Error(`Unknown platform: ${opts.platform}`)
+    span?.setAttribute('content.source_tweet_count', xTweets.length)
 
-  const userPrompt = `Based on this intelligence digest, write a ${opts.platform} post:\n\nSummary: ${insight.summary}\n\nKey themes: ${themes}\n\nKey quotes: ${JSON.stringify(insight.key_quotes || [])}`
+    const tweetContext = xTweets
+      .map((t, i) => `${i + 1}. @${t.source_account}: ${t.content}`)
+      .join('\n\n')
 
-  // Call Groq
-  const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${groqKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.7,
-      max_tokens: opts.platform === 'twitter' ? 300 : 1000,
-    }),
+    const systemPrompt = PLATFORM_PROMPTS[opts.platform]
+    if (!systemPrompt) throw new Error(`Unknown platform: ${opts.platform}`)
+
+    const userPrompt = `Here are recent tweets from @openclaw and @steipete (OpenClaw's founder). Pick the most interesting, specific development and write a tweet about it:\n\n${tweetContext}`
+
+    // Call OpenRouter
+    const aiStart = Date.now()
+    const aiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-3-haiku',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: opts.platform === 'twitter' ? 300 : 1000,
+      }),
+    })
+
+    const aiData = await aiRes.json() as {
+      error?: { message: string }
+      choices?: Array<{ message?: { content?: string } }>
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+    }
+
+    span?.setAttribute('ai.latency_ms', Date.now() - aiStart)
+    span?.setAttribute('ai.status', aiRes.status)
+    if (aiData.usage) {
+      span?.setAttribute('ai.prompt_tokens', aiData.usage.prompt_tokens ?? 0)
+      span?.setAttribute('ai.completion_tokens', aiData.usage.completion_tokens ?? 0)
+      span?.setAttribute('ai.total_tokens', aiData.usage.total_tokens ?? 0)
+    }
+
+    if (aiData.error) throw new Error(`OpenRouter API error: ${aiData.error.message}`)
+
+    let content = aiData.choices?.[0]?.message?.content || ''
+    // Strip any accidental markdown fences
+    content = content.replace(/^```[\s\S]*?\n/, '').replace(/\n```$/, '').trim()
+
+    // Enforce 280-char limit for twitter
+    if (opts.platform === 'twitter' && content.length > 280) {
+      content = content.substring(0, 277) + '...'
+    }
+
+    span?.setAttribute('content.char_count', content.length)
+
+    // Save to Supabase
+    const post = {
+      campaign_id: CAMPAIGN_ID,
+      insight_id: null,
+      platform: opts.platform,
+      content,
+      hashtags: [] as string[],
+      status: 'draft',
+      model_used: 'openrouter/claude-3-haiku',
+    }
+
+    const { data: saved, error: saveErr } = await sb
+      .from('content_generated_posts')
+      .insert(post)
+      .select()
+
+    if (saveErr) throw new Error(`Failed to save post: ${saveErr.message}`)
+
+    const result = saved![0] as GeneratedPost
+    span?.setAttribute('content.post_id', result.id)
+    span?.setAttribute('content.status', 'draft')
+    return result
   })
-
-  const groqData = await groqRes.json() as {
-    error?: { message: string }
-    choices?: Array<{ message?: { content?: string } }>
-  }
-  if (groqData.error) throw new Error(`Groq API error: ${groqData.error.message}`)
-
-  let content = groqData.choices?.[0]?.message?.content || ''
-  // Strip any accidental markdown fences
-  content = content.replace(/^```[\s\S]*?\n/, '').replace(/\n```$/, '').trim()
-
-  // Enforce 280-char limit for twitter
-  if (opts.platform === 'twitter' && content.length > 280) {
-    content = content.substring(0, 277) + '...'
-  }
-
-  // Save to Supabase
-  const post = {
-    campaign_id: CAMPAIGN_ID,
-    insight_id: insight.id,
-    platform: opts.platform,
-    content,
-    hashtags: [] as string[],
-    status: 'draft',
-    model_used: 'groq/llama-3.3-70b',
-  }
-
-  const { data: saved, error: saveErr } = await sb
-    .from('content_generated_posts')
-    .insert(post)
-    .select()
-
-  if (saveErr) throw new Error(`Failed to save post: ${saveErr.message}`)
-  return saved![0] as GeneratedPost
 }
 
 // ── approvePost ──────────────────────────────────────────────────────
@@ -242,89 +279,96 @@ export async function approvePost(id: string): Promise<void> {
  *   console.log(`Published: ${result.platform_post_id}`)
  */
 export async function publishPost(id: string): Promise<{ platform_post_id: string }> {
-  const sb = getSupabase('optimal')
+  return withSpan('content.publish_post', {
+    'content.post_id': id,
+  }, async (span) => {
+    const sb = getSupabase('optimal')
 
-  // Fetch the post
-  const { data: rows, error: fetchErr } = await sb
-    .from('content_generated_posts')
-    .select('*')
-    .eq('id', id)
-    .limit(1)
+    // Fetch the post
+    const { data: rows, error: fetchErr } = await sb
+      .from('content_generated_posts')
+      .select('*')
+      .eq('id', id)
+      .limit(1)
 
-  if (fetchErr) throw new Error(`Failed to fetch post: ${fetchErr.message}`)
-  if (!rows?.length) throw new Error(`Post not found: ${id}`)
+    if (fetchErr) throw new Error(`Failed to fetch post: ${fetchErr.message}`)
+    if (!rows?.length) throw new Error(`Post not found: ${id}`)
 
-  const post = rows[0]
-  const status = post.status as string
-  const platform = post.platform as string
-  const content = (post.content as string) ?? ''
+    const post = rows[0]
+    const status = post.status as string
+    const platform = post.platform as string
+    const content = (post.content as string) ?? ''
 
-  if (status !== 'approved') {
-    throw new Error(
-      `Post status is '${status}', can only publish 'approved' posts. ` +
-      `Pipeline: draft -> approved -> posted`,
-    )
-  }
+    span?.setAttribute('content.platform', platform)
+    span?.setAttribute('content.char_count', content.length)
+    span?.setAttribute('content.status_before', status)
 
-  if (!content.trim()) {
-    throw new Error('Post has no content')
-  }
-
-  let platformPostId: string
-
-  switch (platform) {
-    case 'twitter': {
-      let twitterConfig: TwitterConfig
-      try {
-        twitterConfig = getTwitterConfig()
-      } catch (err) {
-        // Mark as failed with a descriptive message about missing tokens
-        await sb
-          .from('content_generated_posts')
-          .update({ status: 'failed' })
-          .eq('id', id)
-        throw err
-      }
-
-      try {
-        const tweet = await postTweet(content, twitterConfig)
-        platformPostId = tweet.id
-      } catch (err) {
-        await sb
-          .from('content_generated_posts')
-          .update({ status: 'failed' })
-          .eq('id', id)
-        throw new Error(
-          `Failed to post tweet: ${err instanceof Error ? err.message : String(err)}`,
-        )
-      }
-      break
-    }
-    // Future platforms:
-    // case 'facebook':
-    // case 'instagram':
-    //   Use lib/social/meta.ts publishIgPhoto() or similar
-    default:
+    if (status !== 'approved') {
       throw new Error(
-        `Unsupported platform for direct publish: '${platform}'. ` +
-        `Supported: twitter. For Instagram, use "optimal content social instagram".`,
+        `Post status is '${status}', can only publish 'approved' posts. ` +
+        `Pipeline: draft -> approved -> posted`,
       )
-  }
+    }
 
-  // Update post status to 'posted'
-  const { error: updateErr } = await sb
-    .from('content_generated_posts')
-    .update({
-      status: 'posted',
-      posted_at: new Date().toISOString(),
-    })
-    .eq('id', id)
+    if (!content.trim()) {
+      throw new Error('Post has no content')
+    }
 
-  if (updateErr) {
-    console.warn(`Warning: Tweet posted (${platformPostId}) but Supabase update failed: ${updateErr.message}`)
-  }
+    let platformPostId: string
 
-  return { platform_post_id: platformPostId }
+    switch (platform) {
+      case 'twitter': {
+        let twitterConfig: TwitterConfig
+        try {
+          twitterConfig = getTwitterConfig()
+        } catch (err) {
+          await sb
+            .from('content_generated_posts')
+            .update({ status: 'failed' })
+            .eq('id', id)
+          throw err
+        }
+
+        try {
+          const tweet = await postTweet(content, twitterConfig)
+          platformPostId = tweet.id
+          span?.setAttribute('twitter.tweet_id', tweet.id)
+        } catch (err) {
+          await sb
+            .from('content_generated_posts')
+            .update({ status: 'failed' })
+            .eq('id', id)
+          span?.setAttribute('content.status_after', 'failed')
+          throw new Error(
+            `Failed to post tweet: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+        break
+      }
+      default:
+        throw new Error(
+          `Unsupported platform for direct publish: '${platform}'. ` +
+          `Supported: twitter. For Instagram, use "optimal content social instagram".`,
+        )
+    }
+
+    // Update post status to 'posted'
+    const { error: updateErr } = await sb
+      .from('content_generated_posts')
+      .update({
+        status: 'posted',
+        posted_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+
+    if (updateErr) {
+      console.warn(`Warning: Tweet posted (${platformPostId}) but Supabase update failed: ${updateErr.message}`)
+    }
+
+    span?.setAttribute('content.status_after', 'posted')
+    span?.setAttribute('content.platform_post_id', platformPostId)
+    return { platform_post_id: platformPostId }
+  })
 }
 
 // ── listPosts ────────────────────────────────────────────────────────
