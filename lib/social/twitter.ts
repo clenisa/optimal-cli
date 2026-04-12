@@ -168,7 +168,7 @@ export async function getUserByUsername(
 ): Promise<TwitterUser> {
   const cfg = config ?? getTwitterConfig()
   const url = `${API_BASE}/users/by/username/${username}`
-  const queryParams = { 'user.fields': 'id,name,username,public_metrics' }
+  const queryParams = { 'user.fields': 'id,name,username,public_metrics,profile_image_url' }
   const authHeader = buildOAuthHeader('GET', url, cfg, queryParams)
   const fullUrl = `${url}?${new URLSearchParams(queryParams).toString()}`
 
