@@ -1604,6 +1604,45 @@ config
   }, 'config:pull-shared'))
 
 // ═══════════════════════════════════════════════════════════════════════
+// SESSION domain group — session sync with OptimalOS
+// ═══════════════════════════════════════════════════════════════════════
+
+const session = program.command('session').description('Claude Code session management and OptimalOS sync')
+  .addHelpText('after', `
+Commands:
+  session sync     Sync current Claude Code session state to OptimalOS
+
+Examples:
+  $ optimal session sync
+`)
+
+session
+  .command('sync')
+  .description('Sync current Claude Code session state to OptimalOS')
+  .action(wrapCommand(async () => {
+    const { syncSession, detectTmuxSession } = await import('../lib/session/sync.js')
+
+    const tmux = await detectTmuxSession()
+    if (tmux) {
+      fmtInfo(`Detected tmux session: ${colorize(tmux, 'cyan')}`)
+    }
+
+    fmtInfo('Syncing session to OptimalOS...')
+    const result = await syncSession()
+
+    if (result.ok) {
+      success(result.message)
+      if (result.sessionId) {
+        console.log(`  Session ID: ${colorize(result.sessionId, 'cyan')}`)
+      }
+      console.log(`  State: ${colorize(result.state, 'green')}`)
+    } else {
+      fmtError(result.message)
+      process.exit(1)
+    }
+  }, 'session:sync'))
+
+// ═══════════════════════════════════════════════════════════════════════
 // BACKWARD-COMPATIBLE HIDDEN ALIASES
 //
 // Every command that was moved to a domain group keeps its old name as a
