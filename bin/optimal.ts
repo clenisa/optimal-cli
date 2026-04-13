@@ -113,7 +113,7 @@ import {
   getPipelineStatus, generatePost, approvePost, publishPost, listPosts,
 } from '../lib/content/pipeline.js'
 import { syncToStrapi } from '../lib/content/strapi-sync.js'
-import { scrapeTopics } from '../lib/content/scrape-topics.js'
+import { scrapeTopics, listActiveTopics } from '../lib/content/scrape-topics.js'
 import { generateDailyDigest } from '../lib/content/daily-digest.js'
 import { runScheduledPostGen } from '../lib/content/scheduled-post-gen.js'
 import { scrapeRssFeeds, listTopics } from '../lib/content/rss-feeds.js'
@@ -950,42 +950,47 @@ contentPipeline.command('sync').description('Sync approved posts from Supabase t
   console.log()
 }, 'content-pipeline-sync'))
 
-contentPipeline.command('scout').description('Full scout cycle: scrape X timelines, HN, and RSS feeds into content_scraped_items')
+contentPipeline.command('scout').description('Scrape sources for a topic (reads config from research_topics DB)')
   .option('--skip-x', 'Skip X/Twitter timeline scraping')
-  .option('--skip-hn', 'Skip Hacker News scraping')
-  .option('--skip-rss', 'Skip RSS/GitHub feed scraping')
-  .option('--topic <topic>', 'Topic tag for scraped items', 'openclaw')
-  .action(wrapCommand(async (opts: { skipX?: boolean; skipHn?: boolean; skipRss?: boolean; topic: string }) => {
-  const sources = []
-  if (!opts.skipX) sources.push('X')
-  if (!opts.skipHn) sources.push('HN')
-  if (!opts.skipRss) sources.push('RSS')
-  fmtInfo(`Scout cycle: ${sources.join(' + ')} → content_scraped_items`)
+  .option('--skip-rss', 'Skip RSS/Atom feed scraping')
+  .option('--include-hn', 'Include Hacker News top stories')
+  .option('--topic <topic>', 'Topic slug to scrape (or "all" for all active topics)', 'all')
+  .action(wrapCommand(async (opts: { skipX?: boolean; skipRss?: boolean; includeHn?: boolean; topic: string }) => {
+  const slugs = opts.topic === 'all'
+    ? (await listActiveTopics()).map((t) => t.slug)
+    : [opts.topic]
 
-  const result = await scrapeTopics({
-    skipX: opts.skipX,
-    skipHn: opts.skipHn,
-    skipRss: opts.skipRss,
-    topic: opts.topic,
-  })
-
-  console.log(colorize('\n  Scout Results', 'bold'))
-  console.log(colorize('  ══════════════════════════════════════', 'dim'))
-  console.log(`    Parsed:  ${colorize(String(result.totalParsed), 'bold')}`)
-  console.log(`    New:     ${colorize(String(result.inserted), 'green')}`)
-  console.log(`    Existed: ${colorize(String(result.alreadyExisted), 'dim')}`)
-
-  if (Object.keys(result.sources).length > 0) {
-    console.log(`\n  ${colorize('By Source', 'cyan')}`)
-    for (const [src, counts] of Object.entries(result.sources)) {
-      console.log(`    ${src.padEnd(12)} parsed: ${colorize(String(counts.parsed), 'bold')}  new: ${colorize(String(counts.inserted), 'green')}`)
-    }
+  if (slugs.length === 0) {
+    fmtWarn('No active topics found. Add topics via optimal.miami settings.')
+    return
   }
 
-  if (result.errors.length > 0) {
-    console.log(`\n    ${colorize('Errors', 'red')}  ${colorize(String(result.errors.length), 'red')}`)
-    for (const e of result.errors) {
-      console.log(`      ${colorize('!', 'red')} ${e}`)
+  fmtInfo(`Scout: ${slugs.join(', ')} → content_scraped_items`)
+
+  for (const slug of slugs) {
+    console.log(colorize(`\n  ── ${slug} `, 'cyan') + colorize('─'.repeat(Math.max(0, 36 - slug.length)), 'dim'))
+
+    const result = await scrapeTopics({
+      skipX: opts.skipX,
+      skipRss: opts.skipRss,
+      includeHn: opts.includeHn,
+      topic: slug,
+    })
+
+    console.log(`    Parsed:  ${colorize(String(result.totalParsed), 'bold')}`)
+    console.log(`    New:     ${colorize(String(result.inserted), 'green')}`)
+    console.log(`    Existed: ${colorize(String(result.alreadyExisted), 'dim')}`)
+
+    if (Object.keys(result.sources).length > 0) {
+      for (const [src, counts] of Object.entries(result.sources)) {
+        console.log(`    ${colorize(src.padEnd(10), 'dim')} parsed: ${colorize(String(counts.parsed), 'bold')}  new: ${colorize(String(counts.inserted), 'green')}`)
+      }
+    }
+
+    if (result.errors.length > 0) {
+      for (const e of result.errors) {
+        console.log(`    ${colorize('!', 'red')} ${e}`)
+      }
     }
   }
   console.log()

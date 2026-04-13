@@ -1,17 +1,17 @@
 /**
  * Content Pipeline — Scout (Topic Scraper)
  *
- * Full scout cycle: scrapes X timelines, Hacker News front page, and
- * RSS feeds (GitHub repos + issues via RSSHub). Deduplicates against
- * existing content_scraped_items and inserts new items.
+ * Reads topic config from research_topics + research_sources in Supabase.
+ * Topics are managed via OptimalOS settings UI or the API — never hardcoded.
  *
- * Sources:
- *   - X/Twitter: @OpenClawHQ, @steipete timelines via OAuth 1.0a
- *   - Hacker News: Top stories from Firebase API (free, no auth)
- *   - RSS/GitHub: anthropics/claude-code via RSSHub
+ * Source types:
+ *   - x-profile: OAuth 1.0a timeline scraping (10 tweets/account)
+ *   - rss: RSS 2.0 / Atom feed parsing
+ *   - github: GitHub releases via API
+ *
+ * Hacker News is an optional cross-topic source (--include-hn).
  *
  * X API note: Free tier allows ~100 reads/month via OAuth 1.0a.
- * The scout fetches 10 tweets per account per run to stay within budget.
  */
 
 import { getSupabase } from '../supabase.js'
@@ -20,7 +20,6 @@ import {
   getUserByUsername,
   getUserTweets,
   type TwitterConfig,
-  type Tweet,
 } from '../social/twitter.js'
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -45,55 +44,96 @@ interface ScrapedItem {
 }
 
 export interface ScoutOpts {
-  feeds?: Array<{ url: string; account: string }>
-  xAccounts?: string[]
-  hnTopN?: number
   topic?: string
   skipX?: boolean
-  skipHn?: boolean
   skipRss?: boolean
+  includeHn?: boolean
+  hnTopN?: number
 }
 
-// ─�� Constants ─────────────────────��──────────────────────────────────
+interface DbSource {
+  id: string
+  url: string
+  source_type: string
+  label: string | null
+  enabled: boolean
+  item_count: number | null
+}
 
-const RSSHUB_BASE = 'http://localhost:1200'
+// ── Load topic config from Supabase ─────────────────────────────────
 
-const DEFAULT_FEEDS = [
-  { url: `${RSSHUB_BASE}/github/repos/anthropics/claude-code`, account: 'anthropics' },
-  { url: `${RSSHUB_BASE}/github/issue/anthropics/claude-code`, account: 'anthropics' },
-]
+async function loadTopicSources(slug: string): Promise<{ sources: DbSource[]; topicName: string } | null> {
+  const sb = getSupabase('optimal')
 
-const DEFAULT_X_ACCOUNTS = ['openclaw', 'steipete']
+  const { data: topics, error: topicErr } = await sb
+    .from('research_topics')
+    .select('id,name,slug')
+    .eq('slug', slug)
+    .eq('active', true)
+    .limit(1)
 
-const DEFAULT_HN_TOP_N = 15
+  if (topicErr || !topics || topics.length === 0) return null
 
-const HN_API = 'https://hacker-news.firebaseio.com/v0'
+  const topic = topics[0]
 
-// ── RSS parsing ─────────���────────────────────────────────────────────
+  const { data: sources, error: srcErr } = await sb
+    .from('research_sources')
+    .select('id,url,source_type,label,enabled,item_count')
+    .eq('topic_id', topic.id)
+    .eq('enabled', true)
 
-function parseRssItems(xml: string, account: string): ScrapedItem[] {
+  if (srcErr) return null
+
+  return { sources: sources ?? [], topicName: topic.name as string }
+}
+
+/** List all active topics from the DB (for --topic all or listing). */
+export async function listActiveTopics(): Promise<Array<{ slug: string; name: string }>> {
+  const sb = getSupabase('optimal')
+  const { data, error } = await sb
+    .from('research_topics')
+    .select('slug,name')
+    .eq('active', true)
+    .order('created_at', { ascending: true })
+
+  if (error || !data) return []
+  return data as Array<{ slug: string; name: string }>
+}
+
+// ── RSS/Atom parsing ────────────────────────────────────────────────
+
+function parseRssItems(xml: string, account: string, topic: string): ScrapedItem[] {
   const items: ScrapedItem[] = []
+
+  const getTag = (block: string, tag: string): string | null => {
+    const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 's'))
+    return m ? m[1].replace(/(<!\[CDATA\[|\]\]>)/g, '').trim() : null
+  }
+
+  const getAtomLink = (block: string): string | null => {
+    const alt = block.match(/<link[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["']/i)
+    if (alt) return alt[1]
+    const href = block.match(/<link[^>]*href=["']([^"']+)["']/i)
+    return href ? href[1] : null
+  }
+
+  // Try RSS 2.0 <item> elements
   const itemRegex = /<item>(.*?)<\/item>/gs
   let match: RegExpExecArray | null
 
   while ((match = itemRegex.exec(xml)) !== null) {
-    const itemXml = match[1]
-    const getTag = (tag: string): string | null => {
-      const m = itemXml.match(new RegExp(`<${tag}>(.*?)</${tag}>`, 's'))
-      return m ? m[1].replace(/(<!\[CDATA\[|\]\]>)/g, '').trim() : null
-    }
-
-    const title = getTag('title')
-    const link = getTag('link')
-    const description = getTag('description')
-    const pubDate = getTag('pubDate')
+    const block = match[1]
+    const title = getTag(block, 'title')
+    const link = getTag(block, 'link')
+    const description = getTag(block, 'description')
+    const pubDate = getTag(block, 'pubDate')
     const source = link && link.includes('github.com') ? 'github' : 'rss'
 
     items.push({
       source,
       source_url: link,
       source_account: account,
-      topic: 'openclaw',
+      topic,
       title,
       content: (description || title || 'No content').substring(0, 2000),
       raw_json: { title, link, description, pubDate },
@@ -101,10 +141,33 @@ function parseRssItems(xml: string, account: string): ScrapedItem[] {
     })
   }
 
+  // Fall back to Atom <entry> elements (YouTube, some blogs)
+  if (items.length === 0) {
+    const entryRegex = /<entry>([\s\S]*?)<\/entry>/gi
+    while ((match = entryRegex.exec(xml)) !== null) {
+      const block = match[1]
+      const title = getTag(block, 'title')
+      const link = getAtomLink(block)
+      const summary = getTag(block, 'summary') ?? getTag(block, 'content')
+      const pubDate = getTag(block, 'published') ?? getTag(block, 'updated')
+
+      items.push({
+        source: 'rss',
+        source_url: link,
+        source_account: account,
+        topic,
+        title,
+        content: (summary || title || 'No content').substring(0, 2000),
+        raw_json: { title, link, summary, pubDate },
+        scraped_at: new Date().toISOString(),
+      })
+    }
+  }
+
   return items
 }
 
-// ── X timeline scraping ──────────────────────────────────────────────
+// ── X timeline scraping ─────────────────────────────────────────────
 
 async function scrapeXTimelines(
   accounts: string[],
@@ -145,7 +208,9 @@ async function scrapeXTimelines(
   return { items, errors }
 }
 
-// ── Hacker News scraping ─────────────────────────────────────────────
+// ── Hacker News scraping ────────────────────────────────────────────
+
+const HN_API = 'https://hacker-news.firebaseio.com/v0'
 
 interface HnStory {
   id: number
@@ -170,7 +235,6 @@ async function scrapeHackerNews(
     if (!res.ok) throw new Error(`HN API ${res.status}`)
     const storyIds = (await res.json()) as number[]
 
-    // Fetch top N stories in parallel
     const storyResults = await Promise.allSettled(
       storyIds.slice(0, topN).map(async (id) => {
         const r = await fetch(`${HN_API}/item/${id}.json`, { signal: AbortSignal.timeout(10_000) })
@@ -211,13 +275,17 @@ async function scrapeHackerNews(
   return { items, errors }
 }
 
-// ── scrapeTopics (full scout cycle) ────────────��─────────────────────
+// ── Extract X username from profile URL ─────────────────────────────
+
+function extractXUsername(url: string): string | null {
+  const m = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)\/?$/)
+  return m ? m[1] : null
+}
+
+// ── scrapeTopics (full scout cycle) ─────────────────────────────────
 
 export async function scrapeTopics(opts?: ScoutOpts): Promise<ScrapeResult> {
-  const feeds = opts?.feeds ?? DEFAULT_FEEDS
-  const xAccounts = opts?.xAccounts ?? DEFAULT_X_ACCOUNTS
-  const hnTopN = opts?.hnTopN ?? DEFAULT_HN_TOP_N
-  const topic = opts?.topic ?? 'openclaw'
+  const topicSlug = opts?.topic ?? 'openclaw'
   const sb = getSupabase('optimal')
   const result: ScrapeResult = {
     inserted: 0,
@@ -227,60 +295,116 @@ export async function scrapeTopics(opts?: ScoutOpts): Promise<ScrapeResult> {
     sources: {},
   }
 
+  // Load topic config from DB
+  const topicData = await loadTopicSources(topicSlug)
+  if (!topicData) {
+    result.errors.push(`Topic "${topicSlug}" not found or inactive. Add it via optimal.miami settings.`)
+    return result
+  }
+
+  const { sources: dbSources } = topicData
   const allItems: ScrapedItem[] = []
 
-  // ── Source 1: X Timelines ──────────────────────────────────────────
+  // ── X profiles ────────────────────────────────────────────────────
   if (!opts?.skipX) {
-    let twitterConfig: TwitterConfig | null = null
-    try {
-      twitterConfig = getTwitterConfig()
-    } catch (err) {
-      result.errors.push(`X skip: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    const xSources = dbSources.filter((s) => s.source_type === 'x-profile')
+    const xUsernames = xSources
+      .map((s) => extractXUsername(s.url))
+      .filter((u): u is string => !!u)
 
-    if (twitterConfig) {
-      const xResult = await scrapeXTimelines(xAccounts, twitterConfig, topic)
-      allItems.push(...xResult.items)
-      result.errors.push(...xResult.errors)
-      result.sources['x'] = { parsed: xResult.items.length, inserted: 0 }
+    if (xUsernames.length > 0) {
+      let twitterConfig: TwitterConfig | null = null
+      try {
+        twitterConfig = getTwitterConfig()
+      } catch (err) {
+        result.errors.push(`X skip: ${err instanceof Error ? err.message : String(err)}`)
+      }
+
+      if (twitterConfig) {
+        const xResult = await scrapeXTimelines(xUsernames, twitterConfig, topicSlug)
+        allItems.push(...xResult.items)
+        result.errors.push(...xResult.errors)
+        result.sources['x'] = { parsed: xResult.items.length, inserted: 0 }
+      }
     }
   }
 
-  // ── Source 2: Hacker News ──────────────────────────────────────────
-  if (!opts?.skipHn) {
-    const hnResult = await scrapeHackerNews(hnTopN, topic)
+  // ── RSS / Atom feeds ──────────────────────────────────────────────
+  if (!opts?.skipRss) {
+    const rssSources = dbSources.filter((s) => s.source_type === 'rss')
+
+    if (rssSources.length > 0) {
+      const feedResults = await Promise.allSettled(
+        rssSources.map(async (src) => {
+          const res = await fetch(src.url, {
+            signal: AbortSignal.timeout(30_000),
+            headers: { 'User-Agent': 'OptimalCLI/3.2 (RSS Feed Aggregator)' },
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status} from ${src.url}`)
+          const xml = await res.text()
+          return parseRssItems(xml, src.label || new URL(src.url).hostname, topicSlug)
+        }),
+      )
+
+      let rssCount = 0
+      for (let i = 0; i < feedResults.length; i++) {
+        const r = feedResults[i]
+        if (r.status === 'fulfilled') {
+          allItems.push(...r.value)
+          rssCount += r.value.length
+        } else {
+          result.errors.push(`Feed ${rssSources[i].label || rssSources[i].url}: ${r.reason}`)
+        }
+      }
+      result.sources['rss'] = { parsed: rssCount, inserted: 0 }
+    }
+  }
+
+  // ── GitHub sources ────────────────────────────────────────────────
+  const ghSources = dbSources.filter((s) => s.source_type === 'github')
+  for (const src of ghSources) {
+    try {
+      const parts = new URL(src.url).pathname.split('/').filter(Boolean)
+      if (parts.length < 2) continue
+      const [owner, repo] = parts
+
+      const ghRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/releases?per_page=5`,
+        { headers: { 'User-Agent': 'OptimalCLI/3.2' }, signal: AbortSignal.timeout(15_000) },
+      )
+      if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`)
+
+      const releases = (await ghRes.json()) as Array<{ html_url: string; name?: string; tag_name: string; body?: string }>
+      for (const rel of releases) {
+        allItems.push({
+          source: 'github',
+          source_url: rel.html_url,
+          source_account: `${owner}/${repo}`,
+          topic: topicSlug,
+          title: `${rel.name || rel.tag_name} — ${repo}`,
+          content: (rel.body || '').substring(0, 2000),
+          raw_json: { owner, repo, tag: rel.tag_name },
+          scraped_at: new Date().toISOString(),
+        })
+      }
+
+      if (!result.sources['github']) result.sources['github'] = { parsed: 0, inserted: 0 }
+      result.sources['github'].parsed += releases.length
+    } catch (err) {
+      result.errors.push(`GitHub ${src.label || src.url}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // ── Hacker News (optional, cross-topic) ───────────────────────────
+  if (opts?.includeHn) {
+    const hnResult = await scrapeHackerNews(opts.hnTopN ?? 15, topicSlug)
     allItems.push(...hnResult.items)
     result.errors.push(...hnResult.errors)
     result.sources['hackernews'] = { parsed: hnResult.items.length, inserted: 0 }
   }
 
-  // ─�� Source 3: RSS feeds ─────────────────────────────────────��──────
-  if (!opts?.skipRss) {
-    const feedResults = await Promise.allSettled(
-      feeds.map(async (feed) => {
-        const res = await fetch(feed.url, { signal: AbortSignal.timeout(30_000) })
-        if (!res.ok) throw new Error(`HTTP ${res.status} from ${feed.url}`)
-        const xml = await res.text()
-        return parseRssItems(xml, feed.account)
-      }),
-    )
+  // ── Dedup & Insert ────────────────────────────────────────────────
 
-    let rssCount = 0
-    for (let i = 0; i < feedResults.length; i++) {
-      const r = feedResults[i]
-      if (r.status === 'fulfilled') {
-        allItems.push(...r.value)
-        rssCount += r.value.length
-      } else {
-        result.errors.push(`Feed ${feeds[i].url}: ${r.reason}`)
-      }
-    }
-    result.sources['rss'] = { parsed: rssCount, inserted: 0 }
-  }
-
-  // ── Dedup & Insert ─────────────────────────────────────────────────
-
-  // Local dedup by source_url
   const seen = new Set<string>()
   const unique = allItems.filter((item) => {
     if (!item.source_url || seen.has(item.source_url)) return false
@@ -291,37 +415,46 @@ export async function scrapeTopics(opts?: ScoutOpts): Promise<ScrapeResult> {
   result.totalParsed = unique.length
   if (unique.length === 0) return result
 
-  // Check existing URLs in Supabase
-  const { data: existing, error: fetchErr } = await sb
-    .from('content_scraped_items')
-    .select('source_url')
+  // Check existing URLs in Supabase (scoped to topic)
+  const urls = unique.map((i) => i.source_url).filter(Boolean) as string[]
+  const existingUrls = new Set<string>()
 
-  if (fetchErr) {
-    result.errors.push(`Supabase fetch failed: ${fetchErr.message}`)
-    return result
+  for (let i = 0; i < urls.length; i += 50) {
+    const batch = urls.slice(i, i + 50)
+    const { data: existing } = await sb
+      .from('content_scraped_items')
+      .select('source_url')
+      .in('source_url', batch)
+
+    if (existing) {
+      for (const row of existing) {
+        if (row.source_url) existingUrls.add(row.source_url as string)
+      }
+    }
   }
 
-  const existingUrls = new Set((existing ?? []).map((e) => e.source_url))
-  const newItems = unique.filter((item) => !existingUrls.has(item.source_url))
+  const newItems = unique.filter((item) => item.source_url && !existingUrls.has(item.source_url))
 
   result.alreadyExisted = unique.length - newItems.length
   if (newItems.length === 0) return result
 
-  // Batch insert
-  const { error: insertErr } = await sb
-    .from('content_scraped_items')
-    .insert(newItems)
+  // Batch insert (groups of 25)
+  for (let i = 0; i < newItems.length; i += 25) {
+    const batch = newItems.slice(i, i + 25)
+    const { error: insertErr } = await sb
+      .from('content_scraped_items')
+      .insert(batch)
 
-  if (insertErr) {
-    result.errors.push(`Insert failed: ${insertErr.message}`)
-    return result
+    if (insertErr) {
+      result.errors.push(`Insert batch ${Math.floor(i / 25) + 1}: ${insertErr.message}`)
+    } else {
+      result.inserted += batch.length
+    }
   }
-
-  result.inserted = newItems.length
 
   // Update per-source inserted counts
   for (const item of newItems) {
-    const src = item.source === 'github' ? 'rss' : item.source
+    const src = item.source
     if (result.sources[src]) result.sources[src].inserted++
   }
 
