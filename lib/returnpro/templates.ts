@@ -36,7 +36,14 @@ export interface GenerateNetSuiteTemplateOptions {
 interface ProgramIdRow {
   program_code: string
   master_program_name: string
+  master_program_id: number
   is_primary: boolean
+}
+
+interface MasterProgramRow {
+  master_program_id: number
+  master_name: string
+  is_active: boolean
 }
 
 interface AccountRow {
@@ -142,11 +149,19 @@ export async function generateNetSuiteTemplate(
   const solution7Date = month ? `'${month}` : null
 
   // --- Fetch dimension data ---
-  const [programs, accounts] = await Promise.all([
+  // Only include programs whose MASTER is currently active on the income statement.
+  // is_active on dim_master_program is toggled per-close based on IS activity.
+  const [allPrograms, masters, accounts] = await Promise.all([
     paginateAll<ProgramIdRow>(
       'dim_program_id',
-      'program_code,master_program_name,is_primary',
+      'program_code,master_program_name,master_program_id,is_primary',
       'master_program_name',
+      { is_active: 'true' },
+    ),
+    paginateAll<MasterProgramRow>(
+      'dim_master_program',
+      'master_program_id,master_name,is_active',
+      'master_program_id',
       { is_active: 'true' },
     ),
     paginateAll<AccountRow>(
@@ -155,6 +170,9 @@ export async function generateNetSuiteTemplate(
       'account_id',
     ),
   ])
+
+  const activeMasterIds = new Set(masters.map(m => m.master_program_id))
+  const programs = allPrograms.filter(p => activeMasterIds.has(p.master_program_id))
 
   // Secondary sort: within same master_program_name, order by program_code
   programs.sort((a, b) =>
@@ -177,80 +195,39 @@ export async function generateNetSuiteTemplate(
   const accountHeaders = accounts.map(a => a.account_code)
   const allHeaders = [...fixedHeaders, ...accountHeaders]
 
-  // Style the header row
-  const headerRow = dataSheet.addRow(allHeaders)
-  headerRow.font = { bold: true }
-  headerRow.fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FFD9E1F2' }, // light blue
-  }
-  headerRow.alignment = { vertical: 'middle', horizontal: 'center' }
+  // Column widths (set before adding rows so subsequent addRow() doesn't need a
+  // header-regenerating `dataSheet.columns = […]` assignment — that path
+  // double-inserts both the header and data rows).
+  const widths = [45, 35, 15, 15, ...accounts.map(() => 12)]
+  widths.forEach((w, i) => {
+    dataSheet.getColumn(i + 1).width = w
+  })
 
-  // Add one data row per program
-  for (const program of programs) {
-    const rowValues: (string | null)[] = [
-      program.master_program_name,
-      program.program_code,
-      uploadDate ?? null,
-      solution7Date ?? null,
-      // Account value cells start empty
-      ...accounts.map(() => null),
-    ]
-    dataSheet.addRow(rowValues)
-  }
-
-  // Freeze the header row and first two columns
-  dataSheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }]
-
-  // Set column widths
-  const colWidths = [
-    45, // Master Program
-    35, // Program ID
-    15, // Date (Upload)
-    15, // Date (Solution7)
-    ...accounts.map(() => 12),
-  ]
-  dataSheet.columns = allHeaders.map((header, i) => ({
-    header,          // overwritten below via addRow — just sets .key
-    key: header,
-    width: colWidths[i],
-  }))
-
-  // Re-apply the styled header row (addRow above is already row 1; columns
-  // setter re-generates a header via key — replace it with our styled one)
-  // The columns setter inserts an extra header row if we set `header:`.
-  // Avoid that by only setting width/key after rows are added.
-  // Reset: clear columns, re-add rows fresh.
-  // ----- Rebuild cleanly to avoid double-header -----
-  dataSheet.spliceRows(1, dataSheet.rowCount) // clear all rows
-
-  // Re-add styled header
+  // Styled header row
   const hdr = dataSheet.addRow(allHeaders)
   hdr.font = { bold: true }
   hdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } }
   hdr.alignment = { vertical: 'middle', horizontal: 'center' }
   hdr.height = 18
 
-  // Re-add data rows
+  // Double-blank row: captures NetSuite "- Unassigned -" cost bucket (company-wide
+  // items with no program allocation, e.g. warehouse rent, payroll wages).
+  // Both Master Program and Program ID are empty so the close package preserves
+  // a single cell row for unallocated totals without forcing a fake program code.
+  dataSheet.addRow(['', '', uploadDate ?? null, solution7Date ?? null, ...accounts.map(() => null)])
+
+  // One data row per active program
   for (const program of programs) {
-    const vals: (string | null)[] = [
+    dataSheet.addRow([
       program.master_program_name,
       program.program_code,
       uploadDate ?? null,
       solution7Date ?? null,
       ...accounts.map(() => null),
-    ]
-    dataSheet.addRow(vals)
+    ])
   }
 
-  // Column widths (set by index, 1-based)
-  const widths = [45, 35, 15, 15, ...accounts.map(() => 12)]
-  widths.forEach((w, i) => {
-    const col = dataSheet.getColumn(i + 1)
-    col.width = w
-  })
-
+  // Freeze the header row and first two columns
   dataSheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }]
 
   // ------------------------------------------------------------------ //
@@ -285,8 +262,10 @@ export async function generateNetSuiteTemplate(
     ['Upload Date Format', uploadDate ?? '(fill manually — format: MM/1/YYYY)'],
     ['Fiscal Year', fiscalYear ?? '(not specified)'],
     ['Total Programs', String(programs.length)],
+    ['Active Master Programs', String(masters.length)],
     ['Total Account Columns', String(accounts.length)],
-    ['Note', 'Excludes deprecated programs (is_active=false)'],
+    ['Note', 'Includes only programs whose master is is_active=true on the current IS'],
+    ['Unassigned Row', 'Row 2 is blank/blank — use for NetSuite "- Unassigned -" costs'],
     ['', ''],
     ['Instructions', '1. Fill in account values using Solution7 formulas'],
     ['', '2. Use the "Date (Solution7)" column value in your formulas'],
