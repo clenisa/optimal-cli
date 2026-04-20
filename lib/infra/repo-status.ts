@@ -10,6 +10,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { REPO_REGISTRY } from './repo-paths.js'
 
 export interface RepoStatus {
   name: string
@@ -23,13 +24,7 @@ export interface RepoStatus {
   dirtyCount: number       // number of changed files
 }
 
-const REPOS: Array<{ name: string; path: string }> = [
-  { name: 'optimal-cli', path: '/home/oracle/.openclaw/workspace/optimal-cli' },
-  { name: 'optimalOS', path: '/home/oracle/repos/optimalOS' },
-  { name: 'dashboard-returnpro', path: '/home/oracle/repos/dashboard-returnpro' },
-  { name: 'strapi-cms', path: '/home/oracle/strapi-cms' },
-  { name: 'optimal-docs', path: '/home/oracle/repos/optimal-docs' },
-]
+const REPOS = REPO_REGISTRY
 
 function git(repoPath: string, args: string[]): string {
   try {

@@ -8,19 +8,18 @@ export interface BuildPromptOptions {
   extraInstructions?: string
 }
 
-const REPO_DIRS: Record<string, string> = {
-  'optimalOS': '/home/oracle/.openclaw/workspace/optimalOS',
-  'optimal-cli': '/home/oracle/.openclaw/workspace/optimal-cli',
-  'dashboard-returnpro': '/home/oracle/repos/dashboard-returnpro',
-  'strapi-cms': '/home/oracle/strapi-cms',
-}
+import { getRepoPath } from '../infra/repo-paths.js'
+
+const HOME = process.env.OPTIMAL_REPOS_ROOT || process.env.HOME || '/home/oracle'
 
 /**
  * Map a source_repo name to its working directory on the Pi.
+ *
+ * Repo paths come from lib/infra/repo-paths (env-overridable registry).
  */
 export function getWorkingDirectory(sourceRepo: string | null | undefined): string {
-  if (!sourceRepo) return '/home/oracle'
-  return REPO_DIRS[sourceRepo] ?? '/home/oracle'
+  if (!sourceRepo) return HOME
+  return getRepoPath(sourceRepo) ?? HOME
 }
 
 /**
