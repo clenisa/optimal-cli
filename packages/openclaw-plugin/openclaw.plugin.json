@@ -1,0 +1,64 @@
+{
+  "id": "optimal-hub",
+  "name": "Optimal Hub",
+  "description": "OptimalOS kanban + ReturnPro financial board access for OpenClaw agents. Exposes board view/create/claim/update/complete tools backed by the dual Supabase architecture.",
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "optimalSupabaseUrl",
+      "optimalSupabaseServiceKey"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "optimalSupabaseUrl": {
+        "type": "string",
+        "description": "OptimalOS Supabase URL (board, projects, activity_log)."
+      },
+      "optimalSupabaseServiceKey": {
+        "type": "string",
+        "description": "OptimalOS Supabase service role key."
+      },
+      "returnproSupabaseUrl": {
+        "type": "string",
+        "description": "ReturnPro Supabase URL (financial staging, dim tables). Optional — required only for return-pro tools."
+      },
+      "returnproSupabaseServiceKey": {
+        "type": "string",
+        "description": "ReturnPro Supabase service role key. Optional — required only when returnproSupabaseUrl is set."
+      },
+      "defaultActor": {
+        "type": "string",
+        "description": "Default actor name recorded on activity_log entries when no caller identity is available."
+      }
+    }
+  },
+  "uiHints": {
+    "optimalSupabaseUrl": {
+      "label": "OptimalOS Supabase URL",
+      "placeholder": "https://hbfalrpswysryltysonm.supabase.co",
+      "help": "Project URL for the OptimalOS Supabase instance (kanban + activity log)."
+    },
+    "optimalSupabaseServiceKey": {
+      "label": "OptimalOS Service Key",
+      "sensitive": true,
+      "help": "Service role key with read/write on tasks, comments, activity_log."
+    },
+    "returnproSupabaseUrl": {
+      "label": "ReturnPro Supabase URL",
+      "placeholder": "https://vvutttwunexshxkmygik.supabase.co",
+      "help": "Optional ReturnPro project URL — leave blank if you don't need ReturnPro reads.",
+      "advanced": true
+    },
+    "returnproSupabaseServiceKey": {
+      "label": "ReturnPro Service Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "defaultActor": {
+      "label": "Default Actor",
+      "placeholder": "openclaw-agent",
+      "help": "Actor identifier written to activity_log when no agent name is supplied.",
+      "advanced": true
+    }
+  }
+}
