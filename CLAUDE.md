@@ -67,7 +67,24 @@ All async action handlers should use try/catch + `process.exit(1)`, or wrap with
 
 **FK Resolution Chain** (upload-netsuite): account_code → dim_account → program_code → dim_program_id → master_program → dim_master_program (requires client_id) → dim_client. Master program lookup uses composite key `"${clientId}|${masterProgramName}"`.
 
-**Sign Convention**: Revenue accounts with `dim_account.sign_multiplier = -1` are negated at upload time. The audit detects remaining sign-flip residuals via `signFlipMatch`.
+**Sign Convention** (post-Mar 2026 reset): `upload-netsuite` multiplies each amount by `dim_account.sign_multiplier` at insert time. After calibration against the March 2026 close (127 exact matches, 94.7% dollar accuracy), the multipliers are set assuming the canonical Solution7 formula pattern `=-NSGLAPBAL.LOCKED("ReturnPro (Consolidated)", <acct>, <period>, <period>, "Program ID", <programid>)`:
+- Revenue (non-refund 3xxxx): `sign_multiplier = +1` — formula already yields positive
+- Refunds (30030/30040/30045/30070/30080/30090): `sign_multiplier = -1` — flip to negative
+- Cost 4xxxx + opex 5xxxx-8xxxx: `sign_multiplier = -1` — flip to positive
+
+If the formula convention changes (no leading minus, different subsidiary, different filter dimension), re-derive via `scripts/fix-signs-from-audit.ts` — idempotent, data-driven sign flip based on staging-vs-confirmed comparison.
+
+**Solution7 formula defects that tank audits** (March 2026 investigation):
+- `NSGLADBAL` typo instead of `NSGLAPBAL` — function name invalid, returns stale hardcoded values
+- Filter dimension `"New Program"` instead of `"Program ID"` — drops 75-90% of transactions
+- `IF(TRUE, <hardcoded>, NSGLAPBAL(...))` wrapper — freezes the cell; re-saving/re-uploading doesn't refresh
+- Missing formula for row 2 (Unassigned) — leaves 10-15% of consolidated total unaccounted for
+
+See `dashboard-returnpro/CLAUDE.md` → "Solution7 formula — THE canonical signature" for the authoritative pattern reference.
+
+**Dim maintenance per close** (`scripts/march-dim-fix.ts` — rename/clone per month):
+1. Parse IS CSV → upsert missing GL codes into `dim_account` (March: 127→198 codes)
+2. Parse `MasterProgramProgramResults*.xls` NetSuite export → reactivate programids in export, deactivate NetSuite-prefixed programids absent from export. `sync-dims` alone will NOT reactivate (it's deactivate-only).
 
 **XLSM Formula Handling**: Solution7 XLSM files embed NSGLAPBAL formulas. ExcelJS reads these as `{ formula: string, result?: unknown }`. The upload parser extracts `.result` for cached values. Files MUST be saved after formulas evaluate for results to be cached.
 
