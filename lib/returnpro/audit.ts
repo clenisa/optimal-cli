@@ -14,6 +14,14 @@ export interface MonthSummary {
   accuracy: number | null    // percentage on overlap, null if no overlap
   stagedTotal: number        // absolute sum of staged amounts
   confirmedTotal: number     // absolute sum of confirmed amounts
+  /**
+   * Sum |amount| of staging rows for this month with master_program_id IS NULL
+   * (NetSuite "Unassigned" / "(No Master Program)" bucket — corporate-level
+   * costs not attributable to a master program). 10-15% of consolidated total
+   * lives here historically; surfaced separately so it doesn't get hidden in
+   * the staged total.
+   */
+  unassignedStagedTotal: number
 }
 
 export interface AuditResult {
@@ -76,10 +84,11 @@ export async function runAuditComparison(
   months?: string[],
   tolerance = 1.00,
 ): Promise<AuditResult> {
-  // 1. Fetch all staging rows (paginated)
+  // 1. Fetch all staging rows (paginated). Pull master_program_id too so we
+  //    can split out the Unassigned (NULL master_program_id) bucket.
   const stagingRows = await paginateAll(
-    'stg_financials_raw', 'account_code,date,amount', 'date',
-  ) as Array<{ account_code: string; date: string; amount: string }>
+    'stg_financials_raw', 'account_code,date,amount,master_program_id', 'date',
+  ) as Array<{ account_code: string; date: string; amount: string; master_program_id: number | null }>
 
   // 2. Fetch all confirmed income statements (paginated)
   const confirmedRows = await paginateAll(
@@ -88,12 +97,18 @@ export async function runAuditComparison(
 
   // 3. Aggregate staging: account_code|YYYY-MM -> sum(amount)
   //    amount is TEXT in the DB — must parseFloat
+  //    Also build a parallel month -> sum |amount| for Unassigned-bucket rows.
   const stagingAgg = new Map<string, number>()
+  const unassignedByMonth = new Map<string, number>()
   for (const row of stagingRows) {
     const month = row.date ? row.date.substring(0, 7) : null
     if (!month) continue
+    const amt = parseFloat(row.amount) || 0
     const key = `${row.account_code}|${month}`
-    stagingAgg.set(key, (stagingAgg.get(key) ?? 0) + (parseFloat(row.amount) || 0))
+    stagingAgg.set(key, (stagingAgg.get(key) ?? 0) + amt)
+    if (row.master_program_id === null) {
+      unassignedByMonth.set(month, (unassignedByMonth.get(month) ?? 0) + Math.abs(amt))
+    }
   }
 
   // 4. Build confirmed lookup: account_code|YYYY-MM -> total_amount
@@ -183,6 +198,7 @@ export async function runAuditComparison(
       accuracy,
       stagedTotal,
       confirmedTotal,
+      unassignedStagedTotal: unassignedByMonth.get(month) ?? 0,
     })
   }
 
