@@ -191,9 +191,9 @@ export async function exportKpis(options?: ExportKpiOptions): Promise<KpiRow[]> 
 
 function mapRow(row: RpcResult): KpiRow {
   return {
-    month: row.month,
-    kpiName: row.kpi_name,
-    kpiBucket: row.kpi_bucket,
+    month: row.month ?? '',
+    kpiName: row.kpi_name ?? 'Unknown',
+    kpiBucket: row.kpi_bucket ?? 'Unknown',
     programName: row.master_name ?? '- None -',
     clientName: row.client_name ?? 'Unknown',
     totalAmount: typeof row.total_amount === 'string'
@@ -239,11 +239,13 @@ export function formatKpiCsv(rows: KpiRow[]): string {
   return lines.join('\n')
 }
 
-function csvEscape(s: string): string {
-  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-    return `"${s.replace(/"/g, '""')}"`
+function csvEscape(s: string | null | undefined): string {
+  if (s === null || s === undefined) return ''
+  const str = String(s)
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replace(/"/g, '""')}"`
   }
-  return s
+  return str
 }
 
 function fmtAmount(n: number): string {

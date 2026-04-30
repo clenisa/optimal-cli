@@ -41,6 +41,7 @@ import {
   addComment, listComments,
   logActivity, listActivity,
   formatBoardTable, getNextClaimable,
+  normalizeStatus,
   type Task, type TaskStatus, type TaskType,
 } from '../lib/board/index.js'
 import { runAuditComparison } from '../lib/returnpro/audit.js'
@@ -56,6 +57,7 @@ import { processNetSuiteUpload } from '../lib/returnpro/upload-netsuite.js'
 import { uploadIncomeStatements } from '../lib/returnpro/upload-income.js'
 import { detectRateAnomalies } from '../lib/returnpro/anomalies.js'
 import { diagnoseMonths } from '../lib/returnpro/diagnose.js'
+import { collectMonths } from '../lib/cli/months.js'
 import { generateNetSuiteTemplate } from '../lib/returnpro/templates.js'
 import { syncDims } from '../lib/returnpro/sync-dims.js'
 import { runPreflight } from '../lib/returnpro/preflight.js'
@@ -222,9 +224,9 @@ board
     }
     if (opts.status) {
       if (opts.status.includes(',')) {
-        filters.statuses = opts.status.split(',').map((s: string) => s.trim()) as TaskStatus[]
+        filters.statuses = opts.status.split(',').map((s: string) => normalizeStatus(s.trim()))
       } else {
-        filters.status = opts.status as TaskStatus
+        filters.status = normalizeStatus(opts.status)
       }
     }
     if (opts.mine) filters.claimed_by = opts.mine
@@ -308,7 +310,7 @@ board
   .action(async (opts) => {
     const assignedTo = opts.agent ?? opts.assignedTo
     const updates: Record<string, unknown> = {}
-    if (opts.status) updates.status = opts.status
+    if (opts.status) updates.status = normalizeStatus(opts.status)
     if (opts.title) updates.title = opts.title
     if (assignedTo) updates.assigned_to = assignedTo
     if (opts.priority) updates.priority = parseInt(opts.priority)
@@ -318,7 +320,7 @@ board
     if (opts.sourceRepo) updates.source_repo = opts.sourceRepo
     if (opts.targetModule) updates.target_module = opts.targetModule
     if (opts.effort) updates.estimated_effort = opts.effort
-    if (opts.status === 'done') updates.completed_at = new Date().toISOString()
+    if (updates.status === 'done') updates.completed_at = new Date().toISOString()
     const task = await updateTask(opts.id, updates, assignedTo ?? 'cli')
     if (opts.message) await addComment({ task_id: task.id, author: assignedTo ?? 'cli', body: opts.message })
     success(`Updated: ${task.title} -> ${statusBadge(task.status)}`)
@@ -436,7 +438,7 @@ board
     console.log(`\n📊 Board Stats${opts.project ? ` (${opts.project})` : ''}: ${tasks.length} total\n`)
 
     console.log('By Status:')
-    const statusOrder = ['ready', 'in_progress', 'in_review', 'blocked', 'done']
+    const statusOrder = ['ready', 'in_progress', 'review', 'blocked', 'done']
     for (const s of statusOrder) {
       const count = byStatus[s] || 0
       const pct = tasks.length > 0 ? Math.round((count / tasks.length) * 100) : 0
@@ -743,7 +745,7 @@ finance.command('sync-dims').description('Sync dim tables from NetSuite XML expo
 
 finance.command('preflight').description('Pre-template validation for a month').requiredOption('--month <YYYY-MM>', 'Target month').option('--income-statement <path>', 'MP-level income statement CSV for gap analysis').action(async (opts: { month: string; incomeStatement?: string }) => { try { const result = await runPreflight(opts.month, { incomeStatementPath: opts.incomeStatement }); console.log(`\nPre-flight Check — ${opts.month}`); if (result.gaps.length === 0) { console.log(`  ✓ ${result.covered}/${result.totalMPs} income statement MPs have dim coverage`) } else { console.log(`  ✗ ${result.covered}/${result.totalMPs} income statement MPs covered`); console.log(`\n  Gaps:`); for (const g of result.gaps) { console.log(`    - ${g.name}: $${Math.abs(g.totalDollars).toLocaleString()}`) } } if (result.fpaExclusions.length > 0) { console.log(`\n  ℹ ${result.fpaExclusions.length} FP&A-only programs excluded from template`) } console.log(`\n  Active programs: ${result.activePrograms}`); console.log(`  Ready: ${result.ready ? '✓ Yes' : '✗ No — resolve gaps first'}`); process.exit(result.ready ? 0 : 1) } catch (err) { console.error(`Preflight failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
-finance.command('diagnose').description('Run diagnostic checks on staging data for specified months').option('--months <csv>', 'Comma-separated YYYY-MM months (default: all)').action(async (opts: { months?: string }) => { const months = opts.months?.split(',').map(m => m.trim()); try { const result = await diagnoseMonths(months ? { months } : undefined); console.log(`Analysed months: ${result.monthsAnalysed.join(', ')}`); console.log(`Total staging rows: ${result.totalRows} (median: ${result.medianRowCount}/month)\n`); for (const issue of result.issues) { console.log(`  ✗ [${issue.kind}] ${issue.month ?? 'global'}: ${issue.message}`) } if (result.issues.length === 0) { console.log('  ✓ No issues found') } console.log(`\nSummary: ${result.summary.totalIssues} issues found`) } catch (err) { console.error(`Diagnosis failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
+finance.command('diagnose').description('Run diagnostic checks on staging data for specified months').option('--months <m>', 'YYYY-MM months (CSV or repeatable: --months 2026-03 --months 2026-04)', collectMonths, undefined as string[] | undefined).action(async (opts: { months?: string[] }) => { const months = opts.months && opts.months.length > 0 ? opts.months : undefined; try { const result = await diagnoseMonths(months ? { months } : undefined); if (months && result.monthsAnalysed.length === 0) { console.error(`No staging data for requested months: ${months.join(', ')}`); process.exit(1) } console.log(`Analysed months: ${result.monthsAnalysed.join(', ')}`); console.log(`Total staging rows: ${result.totalRows} (median: ${result.medianRowCount}/month)\n`); for (const issue of result.issues) { console.log(`  ✗ [${issue.kind}] ${issue.month ?? 'global'}: ${issue.message}`) } if (result.issues.length === 0) { console.log('  ✓ No issues found') } console.log(`\nSummary: ${result.summary.totalIssues} issues found`) } catch (err) { console.error(`Diagnosis failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 
 finance.command('anomalies').description('Detect rate anomalies via z-score analysis on ReturnPro data').option('--from <YYYY-MM>', 'Start month').option('--to <YYYY-MM>', 'End month').option('--threshold <n>', 'Z-score threshold', '2.0').action(async (opts: { from?: string; to?: string; threshold: string }) => { try { const months = opts.from && opts.to ? (() => { const result: string[] = []; const [fy, fm] = opts.from!.split('-').map(Number); const [ty, tm] = opts.to!.split('-').map(Number); let y = fy, m = fm; while (y < ty || (y === ty && m <= tm)) { result.push(`${y}-${String(m).padStart(2, '0')}`); m++; if (m > 12) { m = 1; y++ } } return result })() : undefined; const result = await detectRateAnomalies({ months, threshold: parseFloat(opts.threshold) }); console.log(`Found ${result.anomalies.length} anomalies (threshold: ${opts.threshold}σ)`); for (const a of result.anomalies.slice(0, 30)) { console.log(`  ${a.month} | ${a.program_code ?? a.master_program} | z=${a.zscore.toFixed(2)} | rate=${a.rate_per_unit}`) } if (result.anomalies.length > 30) console.log(`  ... and ${result.anomalies.length - 30} more`) } catch (err) { console.error(`Anomaly detection failed: ${err instanceof Error ? err.message : String(err)}`); process.exit(1) } })
 

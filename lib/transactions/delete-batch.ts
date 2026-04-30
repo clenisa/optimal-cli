@@ -10,7 +10,8 @@
  *
  * Columns:
  *   transactions:       id, user_id, date, description, amount, category, source, stamp_match_type, created_at
- *   stg_financials_raw: id, account_code, account_name, amount (TEXT), month (YYYY-MM), source, user_id, created_at
+ *   stg_financials_raw: raw_id, account_code, account_name, amount (TEXT), date (YYYY-MM-DD),
+ *                       program_code, master_program, source, created_at  (no user_id, no month col)
  */
 
 import 'dotenv/config'
@@ -78,7 +79,7 @@ function getClientForTable(table: DeleteBatchOptions['table']): SupabaseClient {
  *   - userId is applied as an eq filter on `user_id`
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function applyFilters<T extends Record<string, any>>(
+export function applyFilters<T extends Record<string, any>>(
   query: T,
   table: DeleteBatchOptions['table'],
   userId: string | undefined,
@@ -93,14 +94,33 @@ function applyFilters<T extends Record<string, any>>(
     if (filters.source) q = (q as unknown as { eq(col: string, val: string): T }).eq('source', filters.source) as unknown as T
     if (filters.category) q = (q as unknown as { eq(col: string, val: string): T }).eq('category', filters.category) as unknown as T
   } else {
-    // stg_financials_raw
-    if (userId) q = (q as unknown as { eq(col: string, val: string): T }).eq('user_id', userId) as unknown as T
-    if (filters.month) q = (q as unknown as { eq(col: string, val: string): T }).eq('month', filters.month) as unknown as T
+    // stg_financials_raw — no user_id col, no month col; filter against `date` (YYYY-MM-DD)
+    if (filters.month) {
+      const { start, nextMonthStart } = monthBoundaries(filters.month)
+      q = (q as unknown as { gte(col: string, val: string): T }).gte('date', start) as unknown as T
+      q = (q as unknown as { lt(col: string, val: string): T }).lt('date', nextMonthStart) as unknown as T
+    }
+    if (filters.dateFrom) q = (q as unknown as { gte(col: string, val: string): T }).gte('date', filters.dateFrom) as unknown as T
+    if (filters.dateTo) q = (q as unknown as { lte(col: string, val: string): T }).lte('date', filters.dateTo) as unknown as T
     if (filters.accountCode) q = (q as unknown as { eq(col: string, val: string): T }).eq('account_code', filters.accountCode) as unknown as T
     if (filters.source) q = (q as unknown as { eq(col: string, val: string): T }).eq('source', filters.source) as unknown as T
   }
 
   return q
+}
+
+/** Convert a YYYY-MM month string into [first-of-month, first-of-next-month] ISO dates. */
+export function monthBoundaries(month: string): { start: string; nextMonthStart: string } {
+  const m = /^(\d{4})-(\d{2})$/.exec(month)
+  if (!m) throw new Error(`Invalid month "${month}" — expected YYYY-MM`)
+  const year = parseInt(m[1], 10)
+  const mo = parseInt(m[2], 10)
+  if (mo < 1 || mo > 12) throw new Error(`Invalid month "${month}" — month must be 01-12`)
+  const start = `${year}-${String(mo).padStart(2, '0')}-01`
+  const nextYear = mo === 12 ? year + 1 : year
+  const nextMo = mo === 12 ? 1 : mo + 1
+  const nextMonthStart = `${nextYear}-${String(nextMo).padStart(2, '0')}-01`
+  return { start, nextMonthStart }
 }
 
 /**
@@ -120,6 +140,8 @@ function serializeFilters(
     if (filters.category) out.category = filters.category
   } else {
     if (filters.month) out.month = filters.month
+    if (filters.dateFrom) out.dateFrom = filters.dateFrom
+    if (filters.dateTo) out.dateTo = filters.dateTo
     if (filters.accountCode) out.accountCode = filters.accountCode
     if (filters.source) out.source = filters.source
   }

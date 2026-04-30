@@ -33,6 +33,37 @@ export type Priority = 1 | 2 | 3 | 4
 export type Effort = 'xs' | 's' | 'm' | 'l' | 'xl'
 export type TaskType = 'epic' | 'story' | 'task'
 
+export const TASK_STATUSES: readonly TaskStatus[] = [
+  'backlog', 'ready', 'claimed', 'in_progress', 'review', 'done', 'blocked',
+] as const
+
+const TASK_STATUS_ALIASES: Record<string, TaskStatus> = {
+  in_review: 'review',      // common natural-language form
+  'in-review': 'review',
+  in_progress: 'in_progress', // identity (so it's still valid)
+  'in-progress': 'in_progress',
+  inprogress: 'in_progress',
+  todo: 'backlog',
+  to_do: 'backlog',
+  wip: 'in_progress',
+}
+
+/**
+ * Coerce a user-supplied status string into a canonical TaskStatus.
+ * Handles common aliases (in_review → review, todo → backlog, etc.) and
+ * trims/lowercases input. Throws with a descriptive error on unrecognised values.
+ */
+export function normalizeStatus(input: string): TaskStatus {
+  const key = input.trim().toLowerCase()
+  if ((TASK_STATUSES as readonly string[]).includes(key)) return key as TaskStatus
+  const aliased = TASK_STATUS_ALIASES[key]
+  if (aliased) return aliased
+  throw new Error(
+    `Invalid status "${input}". Valid statuses: ${TASK_STATUSES.join(', ')} ` +
+    `(aliases: ${Object.keys(TASK_STATUS_ALIASES).join(', ')})`,
+  )
+}
+
 export interface Task {
   id: string
   project_id: string
