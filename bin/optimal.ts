@@ -1290,6 +1290,191 @@ tx.command('delete').description('Batch delete transactions or staging rows (saf
 
 
 // ═══════════════════════════════════════════════════════════════════════
+// VAULT domain group — OptimalVault credential ops on Fabric
+// ═══════════════════════════════════════════════════════════════════════
+
+const vault = program.command('vault').description('OptimalVault — Fabric credential ops (add, list, recipients)')
+  .addHelpText('after', `
+Auth:
+  Set OPTIMAL_FABRIC_TOKEN to a Fabric JWT, or pass --token. Grab from iPhone
+  Safari devtools (localStorage) after vault setup. OPTIMAL_FABRIC_URL defaults
+  to https://fabric.optimal.miami.
+
+Commands:
+  vault add        Encrypt + store a credential (age multi-recipient)
+  vault list       List entries (id, label, kind, updated)
+  vault recipients List active recipients (browsers, devices, recovery)
+
+Examples:
+  $ optimal vault recipients
+  $ optimal vault add --label ANTHROPIC_API_KEY --kind api_key --value sk-ant-...
+  $ printf '%s' "$ANTHROPIC_API_KEY" | optimal vault add --label ANTHROPIC_API_KEY --kind api_key --value -
+  $ optimal vault list
+`)
+
+vault
+  .command('add')
+  .description('Encrypt + store a credential entry in the Fabric vault')
+  .requiredOption('-l, --label <label>', 'Human-readable label (e.g. ANTHROPIC_API_KEY)')
+  .requiredOption('-k, --kind <kind>', 'Entry kind: api_key|oauth_refresh|ssh_key|env_blob')
+  .requiredOption('-v, --value <value>', 'Secret value (use "-" to read from stdin)')
+  .option('-m, --metadata <json>', 'Extra metadata as JSON object', '{}')
+  .option('--token <jwt>', 'Fabric JWT (or $OPTIMAL_FABRIC_TOKEN)')
+  .option('--cloud <url>', 'Fabric cloud URL (or $OPTIMAL_FABRIC_URL)', undefined)
+  .action(async (opts) => {
+    const { resolveConfig, addEntry, VAULT_ENTRY_KINDS, readStdin, VaultCliError } =
+      await import('../lib/vault/index.js')
+    try {
+      if (!VAULT_ENTRY_KINDS.includes(opts.kind as any)) {
+        throw new VaultCliError(`Invalid kind "${opts.kind}"`, `Expected one of: ${VAULT_ENTRY_KINDS.join(', ')}`)
+      }
+      const cfg = resolveConfig({ token: opts.token, cloud: opts.cloud })
+      let value: string = opts.value
+      if (value === '-') value = await readStdin()
+      if (!value) throw new VaultCliError('Empty value', 'Provide a non-empty --value or pipe via stdin.')
+      let metadata: Record<string, unknown> = {}
+      try {
+        metadata = JSON.parse(opts.metadata)
+        if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
+          throw new VaultCliError('--metadata must be a JSON object', 'Example: --metadata \'{"env":"prod"}\'')
+        }
+      } catch (e) {
+        if (e instanceof VaultCliError) throw e
+        throw new VaultCliError('Invalid --metadata JSON', String(e))
+      }
+      const result = await addEntry(cfg, { label: opts.label, kind: opts.kind, value, metadata })
+      console.log(success(`Vault entry added`))
+      console.log(`  id:           ${result.id}`)
+      console.log(`  label:        ${opts.label}`)
+      console.log(`  kind:         ${opts.kind}`)
+      console.log(`  encrypted to: ${result.recipientCount} recipient(s)`)
+      for (const r of result.recipients) {
+        console.log(`    - ${r.kind.padEnd(8)} ${r.label ?? '(no label)'}  ${r.pubkey.slice(0, 16)}…`)
+      }
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e)
+      fmtError(msg)
+      const hint = (e as any).hint
+      if (hint) console.error(`  hint: ${hint}`)
+      process.exit(1)
+    }
+  })
+
+vault
+  .command('list')
+  .description('List vault entries (no decryption)')
+  .option('--token <jwt>', 'Fabric JWT (or $OPTIMAL_FABRIC_TOKEN)')
+  .option('--cloud <url>', 'Fabric cloud URL (or $OPTIMAL_FABRIC_URL)', undefined)
+  .option('-j, --json', 'Output as JSON', false)
+  .action(async (opts) => {
+    const { resolveConfig, listEntries } = await import('../lib/vault/index.js')
+    try {
+      const cfg = resolveConfig({ token: opts.token, cloud: opts.cloud })
+      const entries = await listEntries(cfg)
+      if (opts.json) { console.log(JSON.stringify(entries, null, 2)); return }
+      if (entries.length === 0) { console.log(fmtInfo('(no vault entries yet)')); return }
+      console.log(`${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}:`)
+      for (const e of entries) {
+        console.log(`  ${e.id}  ${e.kind.padEnd(14)} ${e.label.padEnd(28)} updated=${e.updated_at}`)
+      }
+    } catch (e) {
+      fmtError((e as Error)?.message ?? String(e))
+      const hint = (e as any).hint
+      if (hint) console.error(`  hint: ${hint}`)
+      process.exit(1)
+    }
+  })
+
+vault
+  .command('import-env')
+  .description('Bulk-import key/value pairs from .env files into the Fabric vault')
+  .option('-f, --file <path...>', 'Specific .env file(s) to scan (default: 4 standard locations)')
+  .option('-x, --execute', 'Actually write entries (default is dry-run)', false)
+  .option('--include-urls', 'Include *_URL vars (skipped by default)', false)
+  .option('--skip-key <KEY...>', 'Additional KEY name(s) to skip (repeatable)')
+  .option('--token <jwt>', 'Fabric JWT (or $OPTIMAL_FABRIC_TOKEN)')
+  .option('--cloud <url>', 'Fabric cloud URL (or $OPTIMAL_FABRIC_URL)', undefined)
+  .action(async (opts) => {
+    const { runImportEnv, describeSkip, VaultCliError } =
+      await import('../lib/vault/import-env.js')
+    try {
+      const res = await runImportEnv({
+        files: opts.file,
+        execute: !!opts.execute,
+        includeUrls: !!opts.includeUrls,
+        skipKeys: opts.skipKey ?? [],
+        token: opts.token,
+        cloud: opts.cloud,
+      }, {
+        onProgress: (row, ok, err) => {
+          if (ok) success(`imported ${row.label} (${row.kind})`)
+          else fmtError(`failed ${row.label}: ${err ?? 'unknown'}`)
+        },
+        onDedupSkipped: (reason) => fmtWarn(reason),
+      })
+
+      if (res.missingFiles.length > 0) {
+        for (const m of res.missingFiles) fmtWarn(`missing: ${m}`)
+      }
+
+      const headers = ['FILE', 'KEY', 'KIND', 'ACTION']
+      const rows = res.rows.map((r) => [
+        r.file,
+        r.key,
+        r.kind ?? '-',
+        r.action === 'import'
+          ? (opts.execute ? 'IMPORTED' : 'WOULD IMPORT')
+          : describeSkip(r.skipReason!),
+      ])
+      console.log(fmtTable(headers, rows))
+
+      const kindBits = Object.entries(res.kindCounts)
+        .filter(([, n]) => n > 0)
+        .map(([k, n]) => `${k}=${n}`)
+        .join(', ') || '(none)'
+      const verb = opts.execute ? 'imported' : 'would import'
+      fmtInfo(`${verb}: ${res.toImport}  skipped: ${res.skipped}  kinds: ${kindBits}`)
+
+      if (opts.execute && res.failed.length > 0) {
+        for (const f of res.failed) fmtError(`failed: ${f.label} — ${f.error}`)
+        process.exit(1)
+      }
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e)
+      fmtError(msg)
+      const hint = (e as any).hint
+      if (hint) console.error(`  hint: ${hint}`)
+      process.exit(1)
+    }
+  })
+
+vault
+  .command('recipients')
+  .description('List active vault recipients (browsers, devices, recovery)')
+  .option('--token <jwt>', 'Fabric JWT (or $OPTIMAL_FABRIC_TOKEN)')
+  .option('--cloud <url>', 'Fabric cloud URL (or $OPTIMAL_FABRIC_URL)', undefined)
+  .option('-j, --json', 'Output as JSON', false)
+  .action(async (opts) => {
+    const { resolveConfig, listRecipients } = await import('../lib/vault/index.js')
+    try {
+      const cfg = resolveConfig({ token: opts.token, cloud: opts.cloud })
+      const rs = await listRecipients(cfg)
+      if (opts.json) { console.log(JSON.stringify(rs, null, 2)); return }
+      if (rs.length === 0) { console.log(fmtInfo('(no recipients — vault is uninitialized)')); return }
+      console.log(`${rs.length} recipient${rs.length === 1 ? '' : 's'}:`)
+      for (const r of rs) {
+        const revoked = r.revoked_at ? ` revoked@${r.revoked_at}` : ''
+        console.log(`  ${r.kind.padEnd(8)} ${(r.label ?? '(unlabeled)').padEnd(28)} ${r.pubkey.slice(0, 24)}…${revoked}`)
+      }
+    } catch (e) {
+      fmtError((e as Error)?.message ?? String(e))
+      const hint = (e as any).hint
+      if (hint) console.error(`  hint: ${hint}`)
+      process.exit(1)
+    }
+  })
+
+// ═══════════════════════════════════════════════════════════════════════
 // INFRA domain group — Deploy, migrate, health, doctor
 // ═══════════════════════════════════════════════════════════════════════
 
