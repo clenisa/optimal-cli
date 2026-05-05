@@ -28,7 +28,8 @@
     "build": "tsc",
     "dev": "tsx watch bin/optimal.ts",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "audit:ci": "pnpm audit --audit-level=high --prod"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -42,6 +43,7 @@
     "@opentelemetry/resources": "^2.6.1",
     "@opentelemetry/sdk-trace-base": "^2.6.1",
     "@supabase/supabase-js": "^2.49.0",
+    "age-encryption": "^0.3.0",
     "commander": "^13.0.0",
     "discord.js": "^14.25.1",
     "dotenv": "^16.4.0",
