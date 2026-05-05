@@ -22,6 +22,8 @@ import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, hostname } from "node:os";
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import * as tls from "node:tls";
 
 import { VaultCliError } from "./vault/index.js";
 
@@ -34,6 +36,15 @@ export interface PairOptions {
   keyPath?: string;
   /** Override JWT file path (tests). */
   jwtPath?: string;
+  /** Override cloud-pin file path (tests). */
+  pinPath?: string;
+  /**
+   * Skip TOFU pin capture during pair (default: false). Set true for tests
+   * that mock fetch and don't want to open a real TLS connection. Even when
+   * skipped, the device daemon's pinning fetch will TOFU on first cloud
+   * request, so the pin still gets captured — just not during pair.
+   */
+  skipPinCapture?: boolean;
 }
 
 export interface PairResult {
@@ -44,6 +55,17 @@ export interface PairResult {
   keyPath: string;
   jwtPath: string;
   generatedFreshKey: boolean;
+  /**
+   * SHA-256 of the cloud's TLS SubjectPublicKeyInfo, captured during the
+   * pair ceremony and persisted next to the device JWT for TOFU origin
+   * pinning (cross-references optimalOS Phase 10a-7 / threat-audit P1 #10
+   * / T7). Null when the pair ran against http:// (tests) or when capture
+   * failed for any reason — pinning is best-effort during pair, the device
+   * daemon's `makePinningFetch` will TOFU on first connect either way.
+   */
+  cloudPinSha256: string | null;
+  /** Path the pin was persisted to, or null if no pin captured. */
+  pinPath: string | null;
 }
 
 export interface DeviceKeyPair {
@@ -59,6 +81,77 @@ function defaultKeyPath(): string {
 
 function defaultJwtPath(): string {
   return join(homedir(), ".config", "optimalos", "device.jwt");
+}
+
+function defaultPinPath(): string {
+  return join(homedir(), ".config", "optimalos", "cloud-pin.sha256");
+}
+
+/**
+ * Open a one-shot TLS connection to `host:port` to peek the server cert,
+ * compute the SHA-256 of its SubjectPublicKeyInfo, and resolve with the hex
+ * hash. Resolves to `null` on any failure — pin capture is best-effort and
+ * must NOT block the pair ceremony (the device daemon's `makePinningFetch`
+ * will TOFU on first connect anyway).
+ *
+ * Uses `rejectUnauthorized: true` so the cert must validate against the
+ * system CA chain — pin ⊕ CA. Captures the SPKI from
+ * `getPeerCertificate()` (DER-encoded SubjectPublicKeyInfo via
+ * the `pubkey` field, matching RFC 7469 / Chromium static pin lists).
+ */
+export async function captureCloudPin(
+  host: string,
+  port = 443,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      // RFC 6066 forbids setting servername to an IP literal; omit it in that
+      // case so the TLS handshake doesn't warn / future-error.
+      const isIpLiteral = /^[0-9.]+$|:/.test(host);
+      const socket = tls.connect(
+        {
+          host,
+          port,
+          ...(isIpLiteral ? {} : { servername: host }),
+          rejectUnauthorized: true,
+        },
+        () => {
+          try {
+            const cert = socket.getPeerCertificate();
+            if (!cert || !cert.pubkey || cert.pubkey.length === 0) {
+              finish(null);
+            } else {
+              const hex = createHash("sha256").update(cert.pubkey).digest("hex");
+              finish(hex);
+            }
+          } catch {
+            finish(null);
+          } finally {
+            socket.end();
+          }
+        },
+      );
+      socket.on("error", () => finish(null));
+      socket.setTimeout(8000, () => {
+        socket.destroy();
+        finish(null);
+      });
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+/** Persist the cloud pin (mode 0644 — public hash). */
+async function persistCloudPin(pinHex: string, path: string): Promise<void> {
+  await fs.mkdir(dirname(path), { recursive: true, mode: 0o755 });
+  await fs.writeFile(path, pinHex.toLowerCase() + "\n", { mode: 0o644 });
 }
 
 /**
@@ -185,6 +278,38 @@ export async function pairDevice(opts: PairOptions): Promise<PairResult> {
   await fs.mkdir(dirname(jwtPath), { recursive: true, mode: 0o700 });
   await fs.writeFile(jwtPath, data.deviceToken + "\n", { mode: 0o600 });
 
+  // TOFU origin pin capture (cross-references optimalOS Phase 10a-7 / P1
+  // #10 / T7). Best-effort: failure here logs a warning but does not fail
+  // the pair ceremony — the device daemon's `makePinningFetch` will TOFU
+  // on first cloud request. Skipped for http:// URLs (test fixtures) and
+  // when `skipPinCapture` is set explicitly.
+  let cloudPinSha256: string | null = null;
+  let pinPathOut: string | null = null;
+  const cloudUrlParsed = new URL(opts.cloudUrl);
+  if (
+    !opts.skipPinCapture &&
+    cloudUrlParsed.protocol === "https:"
+  ) {
+    const pinPath = opts.pinPath ?? defaultPinPath();
+    const port = cloudUrlParsed.port ? Number(cloudUrlParsed.port) : 443;
+    const captured = await captureCloudPin(cloudUrlParsed.hostname, port);
+    if (captured) {
+      try {
+        await persistCloudPin(captured, pinPath);
+        cloudPinSha256 = captured;
+        pinPathOut = pinPath;
+      } catch (err) {
+        console.warn(
+          `pair: TOFU pin capture succeeded but persistence to ${pinPath} failed (${(err as Error).message}). Daemon will TOFU on first connect.`,
+        );
+      }
+    } else {
+      console.warn(
+        `pair: TOFU pin capture for ${cloudUrlParsed.hostname}:${port} returned no cert. Daemon will TOFU on first connect.`,
+      );
+    }
+  }
+
   return {
     deviceId: data.deviceId,
     recipientId: data.recipientId,
@@ -193,5 +318,7 @@ export async function pairDevice(opts: PairOptions): Promise<PairResult> {
     keyPath,
     jwtPath,
     generatedFreshKey: freshlyGenerated,
+    cloudPinSha256,
+    pinPath: pinPathOut,
   };
 }

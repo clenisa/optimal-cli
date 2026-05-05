@@ -82,6 +82,7 @@ test('pairDevice POSTs the right body, persists the JWT, and returns the parsed 
       capabilities: ['claude-code', 'bun'],
       keyPath,
       jwtPath,
+      skipPinCapture: true,
     })
 
     assert.equal(calls.length, 1, 'one HTTP call')
@@ -121,6 +122,7 @@ test('pairDevice surfaces a clean error on 401 with hint', async () => {
         cloudUrl: 'https://fabric.optimal.miami',
         keyPath,
         jwtPath,
+        skipPinCapture: true,
       }),
       (err: Error) => {
         assert.ok(err instanceof VaultCliError)
@@ -160,10 +162,83 @@ test('pairDevice omits capabilities from body when not supplied', async () => {
       label: 'no-caps',
       keyPath,
       jwtPath,
+      skipPinCapture: true,
     })
     assert.equal(captured.deviceLabel, 'no-caps')
     assert.equal(captured.capabilities, undefined, 'capabilities omitted when empty')
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('pairDevice skipPinCapture=true returns null pin fields', async () => {
+  const keyPath = await freshKeyPath()
+  const jwtPath = join(tmpdir(), `pair-test-jwt-${Date.now()}.jwt`)
+  const pinPath = join(tmpdir(), `pair-test-pin-${Date.now()}.sha256`)
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        deviceToken: 'token',
+        recipientId: 'r',
+        deviceId: 'd',
+        expiresAt: 'x',
+        eagerRewrapRequired: false,
+      }),
+      { status: 200 },
+    )) as typeof fetch
+  try {
+    const result = await pairDevice({
+      pairingToken: 'token',
+      cloudUrl: 'https://fabric.optimal.miami',
+      keyPath,
+      jwtPath,
+      pinPath,
+      skipPinCapture: true,
+    })
+    assert.equal(result.cloudPinSha256, null, 'no pin captured when skipped')
+    assert.equal(result.pinPath, null, 'no pin path returned when skipped')
+    assert.equal(existsSync(pinPath), false, 'no pin file written')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('pairDevice does not attempt pin capture for http:// cloudUrl (test fixtures)', async () => {
+  const keyPath = await freshKeyPath()
+  const jwtPath = join(tmpdir(), `pair-test-jwt-${Date.now()}.jwt`)
+  const pinPath = join(tmpdir(), `pair-test-pin-${Date.now()}.sha256`)
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        deviceToken: 'token',
+        recipientId: 'r',
+        deviceId: 'd',
+        expiresAt: 'x',
+        eagerRewrapRequired: false,
+      }),
+      { status: 200 },
+    )) as typeof fetch
+  try {
+    const result = await pairDevice({
+      pairingToken: 'token',
+      cloudUrl: 'http://localhost:3000',
+      keyPath,
+      jwtPath,
+      pinPath,
+    })
+    assert.equal(result.cloudPinSha256, null, 'no pin captured for http://')
+    assert.equal(result.pinPath, null, 'no pin path returned for http://')
+    assert.equal(existsSync(pinPath), false, 'no pin file written for http://')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('captureCloudPin returns null on unreachable host (best-effort)', async () => {
+  const { captureCloudPin } = await import(`../lib/pair.ts?ts=${Date.now()}`)
+  // 192.0.2.0/24 is RFC 5737 TEST-NET-1 — unrouted by definition.
+  const result = await captureCloudPin('192.0.2.1', 443)
+  assert.equal(result, null, 'unroutable host returns null')
 })

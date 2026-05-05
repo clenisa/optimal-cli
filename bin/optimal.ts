@@ -1524,6 +1524,12 @@ Examples:
       console.log(`  key file:      ${result.keyPath}${result.generatedFreshKey ? ' (freshly generated)' : ' (reused existing)'}`)
       console.log(`  jwt file:      ${result.jwtPath}`)
       console.log(`  jwt expires:   ${result.expiresAt}`)
+      if (result.cloudPinSha256 && result.pinPath) {
+        console.log(`  cloud pin:     ${result.cloudPinSha256}`)
+        console.log(`  pin file:      ${result.pinPath}`)
+      } else {
+        console.log(`  cloud pin:     (deferred — daemon will TOFU on first connect)`)
+      }
       console.log('')
       console.log(fmtInfo('Next: start the device daemon to dial out to the cloud.'))
       console.log('  systemctl --user start optimalos-agent.service   # if a unit is installed')
