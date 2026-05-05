@@ -1475,6 +1475,71 @@ vault
   })
 
 // ═══════════════════════════════════════════════════════════════════════
+// PAIR command — enroll this device with the Fabric cloud control plane
+// ═══════════════════════════════════════════════════════════════════════
+
+program
+  .command('pair')
+  .description('Enroll this device as a Fabric paired device (one-shot ceremony)')
+  .requiredOption('--token <jwt>', 'Pairing token from browser /pair page (10-min TTL)')
+  .option('--label <name>', 'Device label shown to operators (default: hostname)')
+  .option('--capabilities <csv>', 'Comma-separated capability tags (default: empty; daemon will report on heartbeat)')
+  .option('--cloud <url>', 'Fabric cloud URL (or $OPTIMAL_FABRIC_URL)', undefined)
+  .option('--key-path <path>', 'Override device key location (default: ~/.config/optimalos/keys/device.key)')
+  .option('--jwt-path <path>', 'Override device JWT location (default: ~/.config/optimalos/device.jwt)')
+  .addHelpText('after', `
+Workflow:
+  1. In a browser, sign in to fabric.optimal.miami and visit /pair
+  2. Click "Generate pairing token" — a 10-minute single-use JWT is shown
+  3. On this device: optimal pair --token <paste-the-jwt>
+  4. The device key is generated at ~/.config/optimalos/keys/device.key (mode 0600)
+     and the 30-day device JWT is saved at ~/.config/optimalos/device.jwt
+  5. Start the daemon to dial out to /ws/device — the device will appear
+     as a paired recipient and route sessions
+
+Examples:
+  $ optimal pair --token eyJhbGc...
+  $ optimal pair --token eyJhbGc... --label "Pi 5 Oracle" --capabilities claude-code,bun,docker
+`)
+  .action(async (opts) => {
+    const { pairDevice } = await import('../lib/pair.js')
+    const { VaultCliError } = await import('../lib/vault/index.js')
+    try {
+      const cloudUrl = (opts.cloud ?? process.env.OPTIMAL_FABRIC_URL ?? 'https://fabric.optimal.miami').replace(/\/$/, '')
+      const capabilities = opts.capabilities
+        ? String(opts.capabilities).split(',').map((s: string) => s.trim()).filter(Boolean)
+        : undefined
+      const result = await pairDevice({
+        pairingToken: opts.token,
+        cloudUrl,
+        label: opts.label,
+        capabilities,
+        keyPath: opts.keyPath,
+        jwtPath: opts.jwtPath,
+      })
+      console.log(success('Device paired with Fabric cloud'))
+      console.log(`  device id:     ${result.deviceId}`)
+      console.log(`  recipient id:  ${result.recipientId}`)
+      console.log(`  age recipient: ${result.ageRecipient}`)
+      console.log(`  key file:      ${result.keyPath}${result.generatedFreshKey ? ' (freshly generated)' : ' (reused existing)'}`)
+      console.log(`  jwt file:      ${result.jwtPath}`)
+      console.log(`  jwt expires:   ${result.expiresAt}`)
+      console.log('')
+      console.log(fmtInfo('Next: start the device daemon to dial out to the cloud.'))
+      console.log('  systemctl --user start optimalos-agent.service   # if a unit is installed')
+      console.log('  bun run src/daemon/cli.ts                        # dev')
+      console.log('')
+      console.log(fmtInfo('Backup the key file to your password manager — losing it means re-pairing.'))
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e)
+      fmtError(msg)
+      const hint = (e as any).hint
+      if (hint) console.error(`  hint: ${hint}`)
+      process.exit(1)
+    }
+  })
+
+// ═══════════════════════════════════════════════════════════════════════
 // INFRA domain group — Deploy, migrate, health, doctor
 // ═══════════════════════════════════════════════════════════════════════
 
