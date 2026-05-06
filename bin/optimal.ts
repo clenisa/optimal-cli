@@ -1481,14 +1481,19 @@ vault
 program
   .command('pair')
   .description('Enroll this device as a Fabric paired device (one-shot ceremony)')
-  .requiredOption('--token <jwt>', 'Pairing token from browser /pair page (10-min TTL)')
+  // --token is required for the legacy paste flow but mutually-exclusive
+  // with --device-grant. We mark it optional at Commander-level and enforce
+  // exactly-one in the action handler so the help text + error messages
+  // can tell the user which mode to pick.
+  .option('--token <jwt>', 'Pairing token from browser /pair page (10-min TTL) — legacy paste flow')
+  .option('--device-grant', 'Use RFC 8628 OAuth device-grant flow (Phase 13a-1) — short user_code + browser approval; no JWT to copy-paste')
   .option('--label <name>', 'Device label shown to operators (default: hostname)')
   .option('--capabilities <csv>', 'Comma-separated capability tags (default: empty; daemon will report on heartbeat)')
   .option('--cloud <url>', 'Fabric cloud URL (or $OPTIMAL_FABRIC_URL)', undefined)
   .option('--key-path <path>', 'Override device key location (default: ~/.config/optimalos/keys/device.key)')
   .option('--jwt-path <path>', 'Override device JWT location (default: ~/.config/optimalos/device.jwt)')
   .addHelpText('after', `
-Workflow:
+Workflow (legacy --token paste flow):
   1. In a browser, sign in to fabric.optimal.miami and visit /pair
   2. Click "Generate pairing token" — a 10-minute single-use JWT is shown
   3. On this device: optimal pair --token <paste-the-jwt>
@@ -1497,26 +1502,78 @@ Workflow:
   5. Start the daemon to dial out to /ws/device — the device will appear
      as a paired recipient and route sessions
 
+Workflow (RFC 8628 --device-grant flow, Phase 13a-1):
+  1. On this device: optimal pair --device-grant
+  2. CLI prints a short XXXX-XXXX user_code + verification URL
+  3. Open the URL on a browser already signed into fabric.optimal.miami
+  4. Type the code, click Approve — CLI picks it up within ~5 seconds
+
 Examples:
   $ optimal pair --token eyJhbGc...
   $ optimal pair --token eyJhbGc... --label "Pi 5 Oracle" --capabilities claude-code,bun,docker
+  $ optimal pair --device-grant
+  $ optimal pair --device-grant --label "Pi 5 Oracle" --capabilities claude-code,bun,docker
 `)
   .action(async (opts) => {
-    const { pairDevice } = await import('../lib/pair.js')
     const { VaultCliError } = await import('../lib/vault/index.js')
     try {
+      // Enforce exactly-one of --token / --device-grant.
+      if (!!opts.token === !!opts.deviceGrant) {
+        if (opts.token && opts.deviceGrant) {
+          throw new VaultCliError(
+            '--token and --device-grant are mutually exclusive',
+            'Pick one: token-paste (--token <jwt>) OR OAuth device-grant (--device-grant).',
+          )
+        }
+        throw new VaultCliError(
+          'pair requires exactly one of --token or --device-grant',
+          'Run `optimal pair --help` for examples.',
+        )
+      }
+
       const cloudUrl = (opts.cloud ?? process.env.OPTIMAL_FABRIC_URL ?? 'https://fabric.optimal.miami').replace(/\/$/, '')
       const capabilities = opts.capabilities
         ? String(opts.capabilities).split(',').map((s: string) => s.trim()).filter(Boolean)
         : undefined
-      const result = await pairDevice({
-        pairingToken: opts.token,
-        cloudUrl,
-        label: opts.label,
-        capabilities,
-        keyPath: opts.keyPath,
-        jwtPath: opts.jwtPath,
-      })
+
+      let result
+      if (opts.deviceGrant) {
+        const { pairDeviceWithGrant } = await import('../lib/pair-device-grant.js')
+        result = await pairDeviceWithGrant({
+          cloudUrl,
+          label: opts.label,
+          capabilities,
+          keyPath: opts.keyPath,
+          jwtPath: opts.jwtPath,
+          onPrompt: (info) => {
+            console.log('')
+            console.log(fmtInfo('Device grant initiated. Approve this code in a browser:'))
+            console.log('')
+            console.log(`  user_code:        ${info.userCode}`)
+            console.log(`  verification_uri: ${info.verificationUri}`)
+            console.log(`  shortcut:         ${info.verificationUriComplete}`)
+            console.log(`  expires:          in ${Math.floor(info.expiresInSec / 60)} minutes`)
+            console.log('')
+            console.log('  Polling every', info.intervalSec, 'seconds...')
+            console.log('')
+          },
+          onPoll: (status) => {
+            if (status.kind === 'slow_down') {
+              console.log(fmtInfo(`server asked to slow down — backing off to ${status.intervalSec}s`))
+            }
+          },
+        })
+      } else {
+        const { pairDevice } = await import('../lib/pair.js')
+        result = await pairDevice({
+          pairingToken: opts.token,
+          cloudUrl,
+          label: opts.label,
+          capabilities,
+          keyPath: opts.keyPath,
+          jwtPath: opts.jwtPath,
+        })
+      }
       console.log(success('Device paired with Fabric cloud'))
       console.log(`  device id:     ${result.deviceId}`)
       console.log(`  recipient id:  ${result.recipientId}`)
