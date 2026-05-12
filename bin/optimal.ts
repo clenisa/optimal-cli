@@ -213,6 +213,33 @@ function resolveAdjustmentType(
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// MORNING — terminal view of latest priority-triage run
+// ═══════════════════════════════════════════════════════════════════════
+
+program
+  .command('morning')
+  .description('Show prioritized NOW lane from latest triage run')
+  .option('--rerun', 'Fire a new triage run first, wait for completion, then show', false)
+  .option(
+    '--url <url>',
+    'Fabric base URL',
+    process.env.OPTIMAL_FABRIC_URL ?? 'https://fabric.optimal.miami',
+  )
+  .option(
+    '--passphrase <pass>',
+    'Auth passphrase (defaults to OPTIMAL_PASSPHRASE env var)',
+    process.env.OPTIMAL_PASSPHRASE,
+  )
+  .action(wrapCommand(async (opts: { rerun?: boolean; url: string; passphrase?: string }) => {
+    const { morningCommand } = await import('../lib/morning/index.js')
+    await morningCommand({
+      url: opts.url,
+      passphrase: opts.passphrase ?? '',
+      rerun: opts.rerun,
+    })
+  }))
+
+// ═══════════════════════════════════════════════════════════════════════
 // BOARD commands (kept as-is)
 // ═══════════════════════════════════════════════════════════════════════
 
